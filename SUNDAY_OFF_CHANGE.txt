@@ -1,0 +1,36 @@
+
+Street to Stability – Sunday Off Update (v5)
+
+CHANGE
+------
+If the player has a job, they cannot work on Sundays.
+
+Sunday Behavior
+----------------
+• No work shifts available
+• No missed-work penalty
+• Player may:
+  - Rest
+  - Train (Library / Gym / Computer)
+  - Do Side Gig
+  - Recreation
+  - Handle life maintenance (hygiene, energy)
+
+WHY THIS HELPS
+--------------
+• Reduces grind and burnout
+• Prevents soft-locks after job loss
+• Creates a natural skill-growth day
+• Matches real-world pacing expectations
+
+IMPLEMENTATION NOTES (game.js)
+------------------------------
+1. Track dayOfWeek (0–6), where 6 = Sunday
+2. In renderActions():
+     if (player.hasFastFoodJob && dayOfWeek === 6)
+       → DO NOT show Work button
+3. In missed-work logic:
+     if (dayOfWeek === 6)
+       → skip missed-work checks
+
+This file documents logic added in v5.

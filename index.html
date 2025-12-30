@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Still Here</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="sceneBackground" class="scene-bg"></div>
+
+  <div id="titleScreen" class="title-screen" aria-label="Title screen">
+    <div class="title-bg"></div>
+
+    <div class="title-inner">
+      <div class="game-title">Still Here</div>
+      <img class="title-logo" src="assets/Armor For Sheep logo.png" alt="Armor For Sheep logo" />
+      <div class="title-tagline">
+        <span class="tagline-flair">✦</span>
+        A hopeful game about <strong>survival</strong>, <strong>choices</strong>, and <strong>second chances</strong>.
+        <span class="tagline-flair">✦</span>
+      </div>
+
+      <div class="title-actions">
+        <button class="title-btn primary" id="titleStartBtn" type="button">Start New Game</button>
+        <button class="title-btn" id="titleContinueBtn" type="button">Continue</button>
+      </div>
+
+      <div class="title-links">
+        <button class="title-link" id="titleHowToBtn" type="button">How to Play</button>
+        <button class="title-link" id="titleDiscordBtn" type="button">Join the Discord</button>
+      </div>
+    </div>
+  </div>
+
+
+      <!-- Full-screen modal layer (used for Start / Continue / Tim & Eli / endings) -->
+      <div id="overlayPanel" class="overlay-layer hidden" aria-hidden="true">
+        <div class="overlay-backdrop" aria-hidden="true"></div>
+        <div class="overlay-card" role="dialog" aria-modal="true">
+          <div id="overlayContent" class="overlay"></div>
+        </div>
+      </div>
+
+
+<div class="game-shell hidden" id="gameShell">
+    <header class="top-bar">
+      <div class="day-segment">
+        <div class="day-line">
+          Day <span id="dayDisplay">1</span>
+          <span class="day-dot">•</span>
+          <span id="weekdayDisplay">Mon</span>
+        </div>
+        <div class="segment-line">
+          <span id="segmentDisplay">Morning</span>
+          <span class="segment-sub" id="segmentSub">Choose one action.</span>
+        </div>
+        <div class="segment-help">
+          <button class="mini-btn" id="howToBtn" type="button" aria-label="How to play">Help</button>
+        </div>
+      </div>
+      <div class="money-status">
+        <div class="money-label">Cash</div>
+        <div class="money-value" id="moneyDisplay">$0</div>
+        <button class="mini-btn" id="saveBtn" type="button" aria-label="Save game">Save</button>
+      </div>
+    </header>
+
+
+    <section class="work-strip" id="workStatusRow">
+      <div class="work-icon">🍔</div>
+      <div class="work-text">
+        <div class="work-title">Work Warnings</div>
+        <div class="work-detail">
+          Warnings at work this week:
+          <span id="missedWorkDisplay">0 / 3</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="hero-card" aria-label="Character and stats">
+      <div class="hero-left">
+        <img id="characterSprite" class="hero-sprite" src="assets/char_street.png" alt="Character" />
+      </div>
+      <div class="hero-right">
+        <section class="stats-card hero-stats">
+          <div class="stats-row" id="hungerRow">
+            <span class="stat-label">Hunger</span>
+            <div class="stat-bar-wrap">
+              <div class="stat-bar-fill hunger" id="hungerBar"></div>
+            </div>
+            <span class="stat-value" id="hungerValue">50</span>
+          </div>
+          <div class="stats-row">
+            <span class="stat-label">Energy</span>
+            <div class="stat-bar-wrap">
+              <div class="stat-bar-fill energy" id="energyBar"></div>
+            </div>
+            <span class="stat-value" id="energyValue">70</span>
+          </div>
+          <div class="stats-row">
+            <span class="stat-label">Hygiene</span>
+            <div class="stat-bar-wrap">
+              <div class="stat-bar-fill hygiene" id="hygieneBar"></div>
+            </div>
+            <span class="stat-value" id="hygieneValue">60</span>
+          </div>
+          <div class="stats-row">
+            <span class="stat-label">Hope</span>
+            <div class="stat-bar-wrap">
+              <div class="stat-bar-fill hope" id="hopeBar"></div>
+            </div>
+            <span class="stat-value" id="hopeValue">55</span>
+          </div>
+        </section>
+
+        <div class="status-inline">
+          <span class="status-label">Status:</span>
+          <span id="statusDisplay">On the street</span>
+          <span class="status-sep">•</span>
+          <span class="status-extra" id="rentStatus"></span>
+        </div>
+
+
+        <section class="traits-card hero-traits">
+          <div class="trait">
+            <span class="trait-label">WE</span>
+            <span class="trait-value" id="weVal">0</span>
+          </div>
+          <div class="trait">
+            <span class="trait-label">INT</span>
+            <span class="trait-value" id="intVal">0</span>
+          </div>
+          <div class="trait">
+            <span class="trait-label">CH</span>
+            <span class="trait-value" id="charmVal">0</span>
+          </div>
+          <div class="trait">
+            <span class="trait-label">FIT</span>
+            <span class="trait-value" id="fitVal">0</span>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <div id="bannerContainer" class="banner"></div>
+    <main class="main-area">
+      <div id="actionsGrid" class="actions-grid"></div>
+    </main>
+
+    <section class="log-card" id="logCard">
+      <div class="log-title-row">
+        <div class="log-title">Day Log</div>
+        <button class="log-toggle" id="logToggle" type="button" aria-expanded="true">Hide</button>
+      </div>
+      <div id="log" class="log-body"></div>
+    </section>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
