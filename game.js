@@ -210,7 +210,7 @@ const player = {
   // Hope changes accumulate during the day and apply after you sleep (end of day),
   // except for major setbacks (fired / apartment lost) which set hope immediately.
   hopePending: 0,
-  money: 5000,
+  money: 0,
 
   workEthic: 0,
   intelligence: 0,
