@@ -210,7 +210,7 @@ const player = {
   // Hope changes accumulate during the day and apply after you sleep (end of day),
   // except for major setbacks (fired / apartment lost) which set hope immediately.
   hopePending: 0,
-  money: 0,
+  money: 5000,
 
   workEthic: 0,
   intelligence: 0,
@@ -265,7 +265,10 @@ const player = {
   // Reflections
   reflectionLastShownDay: 0,
   hiredDay: 0,
-  firstMotelReflectionShown: false
+  firstMotelReflectionShown: false,
+
+  // Track whether the player has ever been hired before (for rehire messaging)
+  everHadJob: false
 };
 
 const DEFAULT_PLAYER = JSON.parse(JSON.stringify(player));
@@ -547,6 +550,9 @@ function maybeShowEndOfDayReflection(onDone) {
 
 
 function maybeTriggerEliEvent(context) {
+  // Once you have a job, Eli mostly fades into the background.
+  // (Tim takes over the "work" arc.)
+  if (player.hasFastFoodJob) return;
   if (player.hasApartment) return;
 
   // Infrequent: at most once per day
@@ -1693,7 +1699,35 @@ player.jobAppliedToday = true;
     player.jobCooldownDays = 0;
     appendLog("<strong>You got the fast food job!</strong> It’s your first steady income.");
     showBanner("success", "You were hired!");
-  } else {
+
+    // Job expectations popup (first hire vs rehire)
+// IMPORTANT: we wait to advance the segment until the player closes the popup
+if (!player.everHadJob) {
+  player.everHadJob = true;
+  openMessageOverlay(
+    "First Day",
+    "Welcome to the team.<br><br>Here’s what we expect:<br>• Show up for your shifts<br>• Do the work<br>• Look presentable (hygiene above <strong>40</strong>)<br><br>Miss too much and you’ll get warnings.<br><strong>3 warnings in a week</strong> means you’re let go.<br><br>Good luck.",
+    "Got it",
+    () => {
+      clampStats();
+      checkForBurnout();
+      nextSegment();
+    }
+  );
+} else {
+  openMessageOverlay(
+    "Back Again",
+    "Welcome back.<br><br>You know the expectations:<br>• Show up for your shifts<br>• Keep your hygiene above <strong>40</strong><br><br>Let’s try to make it work this time.",
+    "Understood",
+    () => {
+      clampStats();
+      checkForBurnout();
+      nextSegment();
+    }
+  );
+}
+return;
+} else {
     addHope(-2);
     appendLog("They went with someone else this time. You can try again later.");
     showBanner("error", "Job denied.");
