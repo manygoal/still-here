@@ -306,7 +306,17 @@ let saveQueued = false;
 function hasSave() {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
-    return !!raw;
+    if (!raw) return false;
+
+    // Defensive: prevent offering Continue after the V1 chapter ending.
+    // Save formats we've used:
+    //  1) Full payload: { v, t, player, logHtml }
+    //  2) Player-only: { ...player }
+    const data = JSON.parse(raw);
+    const p = (data && data.player) ? data.player : data;
+    if (p && p.hasApartment) return false;
+    if (p && p.chapterEnded) return false;
+    return true;
   } catch (e) {
     return false;
   }
@@ -779,6 +789,14 @@ function loadGame() {
     const raw = localStorage.getItem("sts_save_v1");
     if (!raw) return false;
     const data = JSON.parse(raw);
+
+    // V1 ends at apartment. If a save exists from a completed run,
+    // clear it and force a fresh start (prevents Continue from jumping past the ending).
+    if (data && (data.hasApartment || data.chapterEnded)) {
+      clearSave();
+      return false;
+    }
+
     // Shallow-assign known keys only
     Object.keys(player).forEach(k => {
       if (k in data) player[k] = data[k];
@@ -1052,6 +1070,8 @@ function openEndCardOverlay() {
 
   const restartBtn = overlayPanel.querySelector("#endRestartBtn");
   if (restartBtn) restartBtn.addEventListener("click", () => {
+    // Ensure a completed-run save can't be continued past the chapter end.
+    clearSave();
     window.location.reload();
   });
   const creditsBtn = overlayPanel.querySelector("#endCreditsBtn");
@@ -1978,6 +1998,7 @@ function doRentApartment() {
   // V1 HARD STOP: securing an apartment ends the run.
   player.money -= APARTMENT_DEPOSIT;
   player.hasApartment = true;
+  player.chapterEnded = true;
   updateUI();
 
   appendLog("<strong>You sign a lease and move into a tiny apartment.</strong>");
@@ -1985,6 +2006,10 @@ function doRentApartment() {
 
   clampStats();
   closeOverlay();
+
+  // Clear any saved progress so "Continue" can't jump past the chapter ending.
+  // (Players can still restart immediately from the end card.)
+  clearSave();
 
   openMessageOverlay("Stability", REFLECT_APT_ENDING, "End Chapter", () => {
     appendLog("<strong>Ending:</strong> " + REFLECT_APT_ENDING);
