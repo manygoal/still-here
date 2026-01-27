@@ -413,9 +413,7 @@ body {
   gap: 14px;
 }
 
-.actions-grid.hidden {
-  display: none;
-}
+.actions-grid.hidden { display: none !important; }
 
 .action-btn {
   border: none;
@@ -1068,4 +1066,46 @@ button:focus-visible {
   border: 1px solid rgba(255,255,255,0.18);
   background: rgba(0,0,0,0.15);
   font-size: 0.9em;
+}
+
+
+/* --- STUDIO SPLASH (1.5s) --- */
+.splash-screen{
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.splash-screen.hidden{ display:none; }
+.splash-bg{
+  position:absolute;
+  inset:0;
+  background: linear-gradient(180deg, rgba(2,6,23,0.96), rgba(0,0,0,0.96));
+}
+.splash-inner{
+  position: relative;
+  width: min(560px, 92%);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding: 18px;
+  border-radius: 22px;
+  background: rgba(15,23,42,0.65);
+  border: 1px solid rgba(148,163,184,0.25);
+  box-shadow: 0 18px 55px rgba(0,0,0,0.55);
+  animation: splashFade 1.5s ease-in-out both;
+}
+.splash-logo{
+  width: min(420px, 92%);
+  height: auto;
+  display:block;
+}
+@keyframes splashFade{
+  0%{ opacity:0; transform: translateY(6px) scale(0.985); }
+  20%{ opacity:1; transform: translateY(0) scale(1); }
+  80%{ opacity:1; transform: translateY(0) scale(1); }
+  100%{ opacity:0; transform: translateY(-4px) scale(0.99); }
 }

@@ -1001,35 +1001,52 @@ function openHowToOverlay(onClose = null) {
 
 // --- END / CREDITS SCREENS ---
 function openCreditsOverlay(onBack = null) {
-  const lines = [
-    "A small, quiet game about survival and choices.",
-    "",
-    "Design + code: You.",
-    "Made with care — and a lot of iteration.",
-    "",
-    "Want to share feedback?"
-  ];
+  const year = (new Date()).getFullYear();
+
   openOverlay("credits", () => {
-    const discordHint = (DISCORD_INVITE_URL && !DISCORD_INVITE_URL.includes("REPLACE_ME"))
-      ? "Join the Discord to share feedback and help shape the next chapter."
-      : "Discord link not set yet — add your invite URL in game.js before publishing.";
-    return `
-      <div class="sidegig-panel">
-        <div class="panel-header">
-          <div class="panel-title">Credits</div>
-          <div class="panel-sub">${lines.join("<br>")}</div>
-        </div>
-        <div class="panel-row">
-          <span class="panel-label">Community</span>
-          <span class="panel-value">${discordHint}</span>
-        </div>
-        <div class="panel-actions">
-          <button class="panel-button" id="creditsDiscordBtn" type="button">Join the Discord</button>
-          <button class="panel-button primary" id="creditsBackBtn" type="button">Back</button>
-        </div>
+  const discordHint = (DISCORD_INVITE_URL && !DISCORD_INVITE_URL.includes("REPLACE_ME"))
+    ? "Join the Discord to share feedback and help shape the next chapter."
+    : "Discord link not set yet — add your invite URL in game.js before publishing.";
+
+  return `
+    <div class="sidegig-panel">
+      <div class="panel-header">
+        <div class="panel-title">Credits</div>
+        <div class="panel-sub"><strong>Still Here</strong></div>
       </div>
-    `;
-  });
+
+      <div class="panel-row">
+        <span class="panel-label">A game by</span>
+        <span class="panel-value"><strong>Armor for Sheep Games</strong></span>
+      </div>
+
+      <div class="panel-row">
+        <span class="panel-label">Design &amp; Development</span>
+        <span class="panel-value">Kyle Donaldson</span>
+      </div>
+
+      <div class="panel-row">
+        <span class="panel-label">Special Thanks</span>
+        <span class="panel-value">Family and friends who playtested and shared feedback</span>
+      </div>
+
+      <div class="panel-row">
+        <span class="panel-label">© ${year}</span>
+        <span class="panel-value">Armor for Sheep Games</span>
+      </div>
+
+      <div class="panel-row">
+        <span class="panel-label">Community</span>
+        <span class="panel-value">${discordHint}</span>
+      </div>
+
+      <div class="panel-actions">
+        <button class="panel-button" id="creditsDiscordBtn" type="button">Join the Discord</button>
+        <button class="panel-button primary" id="creditsBackBtn" type="button">Back</button>
+      </div>
+    </div>
+  `;
+});
 
   const discordBtn = overlayPanel.querySelector("#creditsDiscordBtn");
   if (discordBtn) {
@@ -2730,12 +2747,30 @@ function openStartMenu() {
 
   // Title screen (separate from gameplay)
   if (gameShell) gameShell.classList.add("hidden");
-  if (titleScreen) titleScreen.classList.remove("hidden");
+
+  // 1.5s studio splash (once per app launch)
+  const splashScreen = document.getElementById("splashScreen");
+  const splashAlreadyShown = (() => {
+    try { return sessionStorage.getItem("afsSplashShown") === "1"; } catch (e) { return false; }
+  })();
+
+  if (splashScreen && !splashAlreadyShown) {
+    try { sessionStorage.setItem("afsSplashShown", "1"); } catch (e) {}
+    splashScreen.classList.remove("hidden");
+    if (titleScreen) titleScreen.classList.add("hidden");
+    window.setTimeout(() => {
+      splashScreen.classList.add("hidden");
+      if (titleScreen) titleScreen.classList.remove("hidden");
+    }, 1500);
+  } else {
+    if (titleScreen) titleScreen.classList.remove("hidden");
+  }
 
   const startBtn = document.getElementById("titleStartBtn");
   const continueBtn = document.getElementById("titleContinueBtn");
   const discordBtn = document.getElementById("titleDiscordBtn");
   const howToTitleBtn = document.getElementById("titleHowToBtn");
+  const creditsTitleBtn = document.getElementById("titleCreditsBtn");
   const howToInGameBtn = document.getElementById("howToBtn");
 
   // Continue only if save exists
@@ -2752,6 +2787,12 @@ function openStartMenu() {
 
   if (howToTitleBtn) {
     howToTitleBtn.addEventListener("click", () => openHowToOverlay());
+  }
+
+  if (creditsTitleBtn) {
+    creditsTitleBtn.addEventListener("click", () => openCreditsOverlay(() => {
+      // stay on title screen
+    }));
   }
 
   if (howToInGameBtn) {

@@ -4,17 +4,25 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Still Here</title>
+  <style>.hidden{display:none!important;}</style>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div id="sceneBackground" class="scene-bg"></div>
 
-  <div id="titleScreen" class="title-screen" aria-label="Title screen">
+  <div id="splashScreen" class="splash-screen hidden" aria-label="Studio splash">
+    <div class="splash-bg"></div>
+    <div class="splash-inner">
+      <img class="splash-logo" src="assets/Armor For Sheep logo.png" alt="Armor for Sheep Games" />
+    </div>
+  </div>
+
+
+  <div id="titleScreen" class="title-screen hidden" aria-label="Title screen">
     <div class="title-bg"></div>
 
     <div class="title-inner">
-      <div class="game-title">Still Here</div>
-      <img class="title-logo" src="assets/Armor For Sheep logo.png" alt="Armor For Sheep logo" />
+<img class="title-logo" src="assets/still_here_logo.png" alt="Still Here logo" />
       <div class="title-tagline">
         <span class="tagline-flair">✦</span>
         A hopeful game about <strong>survival</strong>, <strong>choices</strong>, and <strong>second chances</strong>.
@@ -29,6 +37,7 @@
       <div class="title-links">
         <button class="title-link" id="titleHowToBtn" type="button">How to Play</button>
         <button class="title-link" id="titleDiscordBtn" type="button">Join the Discord</button>
+            <button class="title-link" id="titleCreditsBtn" type="button">Credits</button>
       </div>
     </div>
   </div>
