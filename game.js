@@ -178,6 +178,7 @@ const END_CHAPTER_BODY = [
 // Economy constants
 const APARTMENT_RENT = 120;
 const APARTMENT_DEPOSIT = 240;
+const RELIABLE_CAR_COST = 1500;
 const RENT_INTERVAL_DAYS = 7;
 
 // Side gig supplies
@@ -201,6 +202,9 @@ const player = {
   day: 1,
   segmentIndex: 0,
 
+  _endOfDayLock: false,
+  _sleptTonight: false,
+
   hunger: 50,
   energy: 70,
   hygiene: 60,
@@ -210,7 +214,7 @@ const player = {
   // Hope changes accumulate during the day and apply after you sleep (end of day),
   // except for major setbacks (fired / apartment lost) which set hope immediately.
   hopePending: 0,
-  money: 0,
+  money: 5000,
 
   workEthic: 0,
   intelligence: 0,
@@ -236,6 +240,39 @@ const player = {
 
   // Gear
   hasComputer: false,
+  // Vehicles
+  hasReliableCar: false,
+
+  // Assistant Manager (promotion race) — UI shell only (full logic later)
+  assistantMgrOpportunityShown: false,
+  assistantMgrApplied: false,
+  assistantMgrAppliedDay: 0,
+  assistantMgrStartDay: 0,
+  assistantMgrWeeksElapsed: 0,
+  assistantMgrProgress: 0,
+  assistantMgrRequired: 20,
+  assistantMgrWeekEventCount: 0,
+  assistantMgrWeekEventProgress: 0,
+  assistantMgrWorkedWedThisWeek: false,
+  assistantMgrLastWeekMessage: "",
+  assistantMgrCooldownDays: 0,
+  assistantMgrWeekEventTarget: 0,
+  assistantMgrLastEventId: null,
+  assistantMgrWeekEventSeen: [],
+
+  // Assistant Manager (tug-of-war) — Step 2: data + tick skeleton (not wired yet)
+  assistantMgrWeeksTotal: 20,
+  assistantMgrTugPos: 0,              // -100 (You) .. +100 (Tim)
+  assistantMgrWeekPushes: 0,          // resets weekly
+  assistantMgrPushWeekIndex: -1,   // promo-week index to enforce 2 pushes/week
+  assistantMgrPushedToday: false,     // resets daily
+  assistantMgrCanPushTonight: false,  // set true after a worked shift
+  assistantMgrLastTimEvent: "",
+  assistantMgrLastMove: "", // 'player' | 'tim' for bar pulse
+  assistantMgrTimChatterCooldown: 0,
+  isAssistantManager: false,
+  leadShiftsWorked: 0,
+  apartmentDaysOwned: 0,
 
   // Weekly work tracking
   weekDayIndex: 0,          // 0-6, Monday-ish
@@ -314,8 +351,6 @@ function hasSave() {
     //  2) Player-only: { ...player }
     const data = JSON.parse(raw);
     const p = (data && data.player) ? data.player : data;
-    if (p && p.hasApartment) return false;
-    if (p && p.chapterEnded) return false;
     return true;
   } catch (e) {
     return false;
@@ -382,6 +417,10 @@ function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
 
+
+function randInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
 function appendLog(msg) {
   const p = document.createElement("p");
   p.innerHTML = msg;
@@ -790,13 +829,6 @@ function loadGame() {
     if (!raw) return false;
     const data = JSON.parse(raw);
 
-    // V1 ends at apartment. If a save exists from a completed run,
-    // clear it and force a fresh start (prevents Continue from jumping past the ending).
-    if (data && (data.hasApartment || data.chapterEnded)) {
-      clearSave();
-      return false;
-    }
-
     // Shallow-assign known keys only
     Object.keys(player).forEach(k => {
       if (k in data) player[k] = data[k];
@@ -867,6 +899,16 @@ function openOverlay(mode, innerHTMLBuilder) {
 
 function queueModal(title, message, okLabel = "OK") {
   player.pendingModal = { title, message, okLabel };
+}
+
+// Show a modal immediately if the overlay is free; otherwise queue it for the next end-of-day flow.
+function showOrQueueModal(title, message, okLabel = "OK", onClose = null) {
+  const overlayBusy = !overlayPanel.classList.contains("hidden");
+  if (overlayBusy || player.pendingModal) {
+    queueModal(title, message, okLabel);
+    return;
+  }
+  openMessageOverlay(title, message, okLabel, onClose);
 }
 
 
@@ -1282,6 +1324,7 @@ function handleRentAtEndOfDay() {
     // Lose apartment
     player.hasApartment = false;
     player.daysUntilRent = null;
+    player.apartmentDaysOwned = 0;
     player.hunger = clamp(player.hunger, 40, 100); // you were at least eating
     appendLog("<strong>You couldn't pay rent.</strong> You lose the apartment and are back on the street.");
     showBanner("error", "Apartment lost. You're back on the street.");
@@ -1337,6 +1380,11 @@ if (player.hasFastFoodJob) {
 
   // Rent tick at end of day
   handleRentAtEndOfDay();
+
+  // Track apartment time (used later for promotion gating)
+  if (player.hasApartment) {
+    player.apartmentDaysOwned += 1;
+  }
 }
 
 // --- WORK ATTENDANCE / WEEKLY RESET ---
@@ -1348,6 +1396,16 @@ function recordMorningPassIfNoWork(prevSegmentIndex) {
   // Sundays are a guaranteed day off (no work expected, no penalty).
   if (player.weekDayIndex === 6) {
     player.workedThisMorning = false;
+  // Promotion (tug-of-war) — week boundary reset for push cap.
+  if (isAssistantMgrRaceActive()) {
+    const daysSince = player.day - player.assistantMgrStartDay;
+    const weeks = Math.floor(daysSince / 7);
+    if (weeks !== player.assistantMgrWeeksElapsed) {
+      player.assistantMgrWeeksElapsed = weeks;
+      player.assistantMgrWeekPushes = 0;
+      player.assistantMgrWorkedWedThisWeek = false;
+    }
+  }
     return;
   }
 
@@ -1372,11 +1430,13 @@ function recordMorningPassIfNoWork(prevSegmentIndex) {
       if (player.isShiftLead) {
         player.isShiftLead = false;
         appendLog("<strong>You're demoted.</strong> Too many missed days cost you your lead position.");
+        if (player.assistantMgrApplied) resetAssistantMgrRace({ reason: "Your promotion track resets after demotion.", cooldownDays: 7 });
         showBanner("error", "Demoted for too many absences.");
         showWorkNotice("Demoted", "Too many missed mornings this week cost you your lead position.<br><br>Tip: If you need to recover, use shelter/motel to reset your next day.");
       } else {
         player.hasFastFoodJob = false;
         player.jobCooldownDays = 7;
+        if (player.assistantMgrApplied) resetAssistantMgrRace({ reason: "Your promotion track resets after losing the job.", cooldownDays: 7 });
         setHopeImmediate(-5);
         appendLog("<strong>You're fired.</strong> Too many missed days. You can't reapply here for a week.");
         showBanner("error", "Fired. Job reapplication locked for 7 days.");
@@ -1415,6 +1475,7 @@ function applyHygieneWarningIfNeeded() {
     if (player.isShiftLead) {
       player.isShiftLead = false;
       appendLog("<strong>You're demoted.</strong> Too many warnings this week cost you your lead position.");
+      if (player.assistantMgrApplied) resetAssistantMgrRace({ reason: "Your promotion track resets after demotion.", cooldownDays: 7 });
       showBanner("error", "Demoted for too many warnings.");
       showWorkNotice("Demoted", "Too many warnings this week cost you your lead position.<br><br>Keep hygiene above 40 and try not to miss mornings.");
     } else {
@@ -1432,9 +1493,17 @@ function applyHygieneWarningIfNeeded() {
 function handleNewDay() {
   player.day += 1;
   player.segmentIndex = 0;
+  player._endOfDayLock = false;
+  player._sleptTonight = false;
+  // Promotion push flags reset each new day.
+  player.assistantMgrPushedToday = false;
+  player.assistantMgrCanPushTonight = false;
+  syncAssistantMgrPromoWeek();
   player.weekDayIndex = (player.weekDayIndex + 1) % 7;
   if (player.weekDayIndex === 0) {
     player.missedWorkThisWeek = 0;
+    // Promotion pushes reset each work week.
+    player.assistantMgrWeekPushes = 0;
     appendLog("<em>A new work week begins.</em>");
   }
   player.workedThisMorning = false;
@@ -1442,6 +1511,25 @@ function handleNewDay() {
   player.hygieneWarnedToday = false;
   player.jobAppliedToday = false;
   appendLog("<strong>Day " + player.day + "</strong> begins. Morning.");
+
+  // Apartment day counter
+  if (player.hasApartment) player.apartmentDaysOwned += 1;
+
+  // Assistant manager cooldown
+  if (player.assistantMgrCooldownDays > 0) {
+    player.assistantMgrCooldownDays -= 1;
+    if (player.assistantMgrCooldownDays <= 0) {
+      player.assistantMgrCooldownDays = 0;
+    }
+  }
+
+  // Weekly review for assistant manager consideration (every 7 days from apply).
+  if (isAssistantMgrRaceActive()) {
+    const daysSince = player.day - player.assistantMgrStartDay;
+    if (daysSince > 0 && daysSince % 7 === 0) {
+      assistantMgrWeeklyReview();
+    }
+  }
 
   // Hygiene warnings now only apply if you actually go to work with low hygiene.
   maybeTriggerEliEvent("newDay");
@@ -1457,27 +1545,29 @@ function nextSegment() {
     applyEndOfDay();
     if (checkGameOver()) return;
 
-    // End-of-day flow:
-    // 1) show any queued modal (Eli / Tim beats), then
-    // 2) optional reflection, then
-    // 3) start the new day.
+    // Hard guarantee: advance the day first, then show any end-of-day messages.
     closeOverlay();
 
     const pending = player.pendingModal;
     player.pendingModal = null;
 
-    const continueFlow = () => {
+    handleNewDay();
+    closeOverlay();
+    updateUI();
+
+    const showReflection = () => {
+      // Reflection should never affect time; it's just a modal.
       maybeShowEndOfDayReflection(() => {
-        handleNewDay();
-        closeOverlay();
-        updateUI();
+        // nothing else to do
       });
     };
 
     if (pending && pending.message) {
-      openMessageOverlay(pending.title || "A Brief Moment", pending.message, pending.okLabel || "OK", continueFlow);
+      openMessageOverlay(pending.title || "A Brief Moment", pending.message, pending.okLabel || "OK", () => {
+        showReflection();
+      });
     } else {
-      continueFlow();
+      showReflection();
     }
 
     return;
@@ -1787,7 +1877,9 @@ function doWorkShift() {
   }
 
   let wage;
-  if (!player.isShiftLead) {
+  if (player.isAssistantManager) {
+    wage = Math.floor(Math.random() * 21) + 60; // 60–80
+  } else if (!player.isShiftLead) {
     wage = Math.floor(Math.random() * 9) + 26; // 26–34
   } else {
     wage = Math.floor(Math.random() * 12) + 33; // 33–44
@@ -1801,18 +1893,43 @@ function doWorkShift() {
   // Working doesn't instantly fix morale; hope settles after sleep.
   addHope(0);
   player.shiftsWorked += 1;
+  if (player.isShiftLead) player.leadShiftsWorked += 1;
   player.workedThisMorning = true;
+
+  // Assistant manager race: track Wednesday attendance.
+  if (isAssistantMgrRaceActive() && player.weekDayIndex === 2) {
+    player.assistantMgrWorkedWedThisWeek = true;
+  }
 
   clampStats();
   appendLog("You work a full shift and earn <strong>$" + wage + "</strong>.");
   showBanner("success", "Shift complete: +$" + wage + ".");
 
-  // takes entire day
-  player.segmentIndex = 3;
+  // takes the day (reduced if you have a reliable car)
+  player.segmentIndex = player.hasReliableCar ? 2 : 3;
+  // Tug-of-war promotion: allow pushes tonight after you worked a shift.
+  if (isAssistantMgrRaceActive()) {
+    player.assistantMgrCanPushTonight = true;
+    player.assistantMgrPushedToday = false;
+  }
   checkForBurnout();
   // Possible coworker beat (post-shift modal before sleep selection)
   const openedTim = maybeTriggerTimEvent("work");
   if (!openedTim) {
+    // Assistant manager opportunity notice (UI shell)
+    if (isAssistantMgrOpportunityReady() && !player.assistantMgrOpportunityShown) {
+      player.assistantMgrOpportunityShown = true;
+      openMessageOverlay(
+        "Notice",
+        "Management mentioned they’re considering candidates for assistant manager.",
+        "OK",
+        () => updateUI()
+      );
+      return;
+    }
+    // NOTE: Old assistant-manager daily decision popups removed (Step 1).
+    // Tug-of-war promotion will replace this system.
+
     updateUI();
   }
 }
@@ -1988,6 +2105,15 @@ function doMotel() {
 
 // Apartment sleep
 function doApartmentSleep() {
+  // Apartment sleep is a Night-only action. If clicked again next morning, ignore.
+  if (segments[player.segmentIndex] !== "Night") return;
+
+  // Prevent double-click / re-entry (can otherwise consume the next morning).
+  if (player._endOfDayLock || player._sleptTonight) return;
+
+  player._endOfDayLock = true;
+  player._sleptTonight = true;
+
   appendLog("You sleep in your small apartment. It's not glamorous, but it's yours.");
   player.energy = clamp(player.energy + 30, 0, 100);
   player.hygiene = clamp(player.hygiene + 10, 0, 100);
@@ -2015,7 +2141,6 @@ function doRentApartment() {
   // V1 HARD STOP: securing an apartment ends the run.
   player.money -= APARTMENT_DEPOSIT;
   player.hasApartment = true;
-  player.chapterEnded = true;
   updateUI();
 
   appendLog("<strong>You sign a lease and move into a tiny apartment.</strong>");
@@ -2024,16 +2149,13 @@ function doRentApartment() {
   clampStats();
   closeOverlay();
 
-  // Clear any saved progress so "Continue" can't jump past the chapter ending.
-  // (Players can still restart immediately from the end card.)
-  clearSave();
-
-  openMessageOverlay("Stability", REFLECT_APT_ENDING, "End Chapter", () => {
-    appendLog("<strong>Ending:</strong> " + REFLECT_APT_ENDING);
-    // Freeze gameplay for V1 (chapter end)
-    actionsGrid.innerHTML = "";
+  // Chapter 2: moving into an apartment no longer ends the run.
+  // Show a short reflective message, then continue play.
+  openMessageOverlay("Stability", REFLECT_APT_ENDING, "Continue", () => {
+    appendLog("<strong>Milestone:</strong> " + REFLECT_APT_ENDING);
     closeOverlay();
-    openEndCardOverlay();
+    updateUI();
+    saveGame();
   });
 }
 
@@ -2058,6 +2180,747 @@ function getCookingTimeCostText() {
 function getCookingEarnings() {
   // Earnings scale purely from effort + skill
   return 2 * player.workEthic + player.intelligence;
+}
+
+
+function openVehiclesPanel() {
+  if (!player.hasApartment) {
+    showBanner("error", "You need stable housing first.");
+    appendLog("You look at used car listings, but you’re not ready yet. Secure housing first.");
+    return;
+  }
+
+  openOverlay("vehicles", () => {
+    const owned = player.hasReliableCar;
+    const canAfford = player.money >= RELIABLE_CAR_COST;
+
+    return `
+      <div class="sidegig-panel">
+        <div class="panel-header">
+          <div class="panel-title">Vehicles</div>
+          <div class="panel-sub">A car doesn’t fix life — it gives you time back.</div>
+        </div>
+
+        <div class="panel-row">
+          <span class="panel-label">Reliable Used Car</span>
+          <span class="panel-value">${owned ? "Owned" : "$" + RELIABLE_CAR_COST}</span>
+        </div>
+
+        <div class="panel-row">
+          <span class="panel-label">Benefit</span>
+          <span class="panel-value">Work takes 2 segments (instead of all day)</span>
+        </div>
+
+        <div class="panel-row">
+          <span class="panel-label">Status</span>
+          <span class="panel-value">${owned ? "You have reliable transportation." : "Available after apartment."}</span>
+        </div>
+
+        <div class="panel-buttons">
+          <button class="panel-btn primary" id="buyReliableCarBtn" ${owned || !canAfford ? "disabled" : ""}>
+            ${owned ? "Purchased" : ("Buy ($" + RELIABLE_CAR_COST + ")")}
+          </button>
+          <button class="panel-btn" id="vehiclesBackBtn">Back</button>
+        </div>
+
+        ${(!owned && !canAfford)
+          ? `<div class="text-muted">You need $${RELIABLE_CAR_COST} to buy the car.</div>`
+          : `<div class="text-muted">Owning a car makes work end earlier — one segment back for the rest of the day.</div>`}
+      </div>
+    `;
+  });
+
+  const buyBtn = document.getElementById("buyReliableCarBtn");
+  const backBtn = document.getElementById("vehiclesBackBtn");
+
+  if (buyBtn) {
+    buyBtn.onclick = () => {
+      if (player.hasReliableCar) return;
+      if (player.money < RELIABLE_CAR_COST) {
+        showBanner("error", "Not enough money.");
+        return;
+      }
+      player.money -= RELIABLE_CAR_COST;
+      player.hasReliableCar = true;
+      appendLog("<strong>You buy a reliable used car.</strong> It’s not luxury — it’s breathing room.");
+      showBanner("success", "Purchased: Reliable Used Car.");
+      clampStats();
+      closeOverlay();
+      updateUI();
+      queueSave();
+    };
+  }
+
+  if (backBtn) {
+    backBtn.onclick = () => {
+      closeOverlay();
+      updateUI();
+    };
+  }
+}
+
+// Assets (owned items)
+function openAssetsPanel() {
+  if (!player.hasApartment) {
+    showBanner("error", "You need stable housing first.");
+    appendLog("You check what you own… but right now, you’re still surviving day to day.");
+    return;
+  }
+
+  openOverlay("assets", () => {
+    const hasCar = !!player.hasReliableCar;
+
+    return `
+      <div class="sidegig-panel">
+        <div class="panel-header">
+          <div class="panel-title">Assets</div>
+          <div class="panel-sub">What you’ve earned so far.</div>
+        </div>
+
+        <div class="assets-grid">
+          <div class="asset-card">
+            <div class="asset-name">Apartment</div>
+            <div class="asset-desc">Stable housing. Rent due weekly.</div>
+            <div class="asset-status ok">Owned</div>
+          </div>
+
+          <div class="asset-card ${hasCar ? "" : "locked"}">
+            <div class="asset-row">
+              <div>
+                <div class="asset-name">Reliable Used Car</div>
+                <div class="asset-desc">Reliable transportation. Work ends earlier.</div>
+              </div>
+              ${hasCar ? `<img class="asset-img" src="assets/car_reliable.png" alt="Reliable used car" />` : ""}
+            </div>
+            <div class="asset-status ${hasCar ? "ok" : "locked"}">${hasCar ? "Owned" : "Not owned"}</div>
+          </div>
+        </div>
+
+        <div class="panel-buttons">
+          <button class="panel-btn" id="assetsBackBtn">Back</button>
+        </div>
+      </div>
+    `;
+  });
+
+  const backBtn = document.getElementById("assetsBackBtn");
+  if (backBtn) {
+    backBtn.onclick = () => {
+      closeOverlay();
+      updateUI();
+    };
+  }
+}
+
+// Assistant Manager — Promotion UI shell (logic later)
+function openAssistantManagerApplyPanel() {
+  openOverlay("assistant_apply", () => {
+    return `
+      <div class="sidegig-panel">
+        <div class="panel-header">
+          <div class="panel-title">Assistant Manager Consideration</div>
+          <div class="panel-sub">
+            This isn’t automatic.<br><br>
+            They’re watching consistency, reliability, and how you handle pressure.<br><br>
+            Experience and how you carry yourself can help — but consistency matters more.<br><br>
+            Staff meetings usually happen on Wednesdays.<br><br>
+            <strong>Progress is reviewed weekly.</strong>
+          </div>
+        </div>
+        <div class="panel-actions">
+          <button class="panel-button primary" id="assistantApplyBtn" type="button">Apply</button>
+          <button class="panel-button" id="assistantApplyBackBtn" type="button">Back</button>
+        </div>
+      </div>
+    `;
+  });
+
+  const applyBtn = overlayPanel.querySelector("#assistantApplyBtn");
+  const backBtn = overlayPanel.querySelector("#assistantApplyBackBtn");
+  if (applyBtn) applyBtn.addEventListener("click", () => {
+    // Start the 20-week tug-of-war assistant manager consideration race.
+    player.assistantMgrApplied = true;
+    player.assistantMgrAppliedDay = player.day;
+    player.assistantMgrStartDay = player.day;
+
+    player.assistantMgrWeeksElapsed = 0;
+    player.assistantMgrWeeksTotal = 20;
+    player.assistantMgrTugPos = 0;
+
+    player.assistantMgrWeekPushes = 0;
+    player.assistantMgrPushedToday = false;
+    player.assistantMgrCanPushTonight = false;
+    player.assistantMgrWorkedWedThisWeek = false;
+
+    player.assistantMgrLastWeekMessage = "Too early to tell.";
+    player.assistantMgrLastTimEvent = "";
+
+    closeOverlay();
+    showBanner("", "You’ve put your name in.");
+    appendLog("You apply for assistant manager consideration.");
+    updateUI();
+    queueSave();
+  });
+  if (backBtn) backBtn.addEventListener("click", () => {
+    closeOverlay();
+    updateUI();
+  });
+}
+
+function openAssistantManagerProgressPanel() {
+  openOverlay("assistant_progress", () => {
+    const pos = clamp(player.assistantMgrTugPos || 0, -100, 100);
+    const pct = ((pos + 100) / 200) * 100; // 0..100
+    const week = player.assistantMgrWeeksElapsed || 0;
+    const total = player.assistantMgrWeeksTotal || 20;
+
+    const statusText = (player.assistantMgrLastWeekMessage && player.assistantMgrLastWeekMessage.length)
+      ? player.assistantMgrLastWeekMessage
+      : getAssistantMgrTugText(pos);
+
+    return `
+      <div class="sidegig-panel">
+        <div class="panel-header">
+          <div class="panel-title">Work Progress</div>
+          <div class="panel-sub">Assistant manager consideration • Week ${week}/${total}</div>
+        </div>
+
+        <div class="tug-wrap">
+          <div class="tug-bar" aria-label="Promotion tug of war">
+            <div class="tug-center"></div>
+            <div class="tug-marker ${player.assistantMgrLastMove === "player" ? "tug-pulse-you" : (player.assistantMgrLastMove === "tim" ? "tug-pulse-tim" : "")}" style="left:${pct}%;"></div>
+          </div>
+          <div class="tug-labels"><span>You</span><span>Tim</span></div>
+
+          <div class="progress-text">${statusText}</div>
+          ${player.assistantMgrLastTimEvent ? `<div class="tug-note">${player.assistantMgrLastTimEvent}</div>` : ``}
+        </div>
+        <div class="tug-note">
+          <strong>Pushing:</strong> After a worked shift • Night only • 1/day • 2/week
+        </div>
+
+        <div class="panel-buttons">
+          <button class="panel-btn" id="assistantProgressBackBtn">Back</button>
+        </div>
+      </div>
+    `;
+  });
+
+  const backBtn = document.getElementById("assistantProgressBackBtn");
+  if (backBtn) backBtn.onclick = () => {
+    closeOverlay();
+    updateUI();
+  };
+}
+
+
+
+
+function computeAssistantMgrRequired() {
+  let req = 20;
+  if (player.workEthic > 10) req -= 1;
+  if (player.workEthic > 15) req -= 1;
+  if (player.charm > 10) req -= 1;
+  if (player.charm > 15) req -= 1;
+  return Math.max(req, 16);
+}
+
+function isAssistantMgrRaceActive() {
+  if (!player.assistantMgrApplied) return false;
+  if (player.isAssistantManager) return false;
+  // If you lose the job or lose shift lead, the race can't continue.
+  if (!player.hasFastFoodJob) return false;
+  if (!player.isShiftLead) return false;
+  return true;
+}
+
+
+function getAssistantMgrPromoWeekIndex() {
+  if (!player.assistantMgrStartDay) return 0;
+  return Math.floor((player.day - player.assistantMgrStartDay) / 7);
+}
+
+function syncAssistantMgrPromoWeek() {
+  if (!isAssistantMgrRaceActive()) return;
+  const idx = getAssistantMgrPromoWeekIndex();
+  if (player.assistantMgrPushWeekIndex !== idx) {
+    player.assistantMgrPushWeekIndex = idx;
+    player.assistantMgrWeekPushes = 0;
+    player.assistantMgrWorkedWedThisWeek = false;
+  }
+}
+
+function canAssistantMgrPushNow() {
+  syncAssistantMgrPromoWeek();
+  if (!isAssistantMgrRaceActive()) return false;
+
+  // Offer pushes at Night if the player actually worked a shift today.
+  if (!player.workedThisMorning) return false;
+  if (player.energy <= 0) return false;
+
+  if (player.assistantMgrPushedToday) return false;
+  if ((player.assistantMgrWeekPushes || 0) >= 2) return false;
+
+  // Pushes are offered only at Night (sleep UI) to keep it consistent.
+  const segName = segments[player.segmentIndex];
+  if (segName !== "Night") return false;
+
+  return true;
+}
+
+
+function openAssistantMgrPushPanel() {
+  if (!canAssistantMgrPushNow()) return;
+
+  openOverlay("assistant_push", () => {
+    const remaining = 2 - (player.assistantMgrWeekPushes || 0);
+    return `
+      <div class="sidegig-panel">
+        <div class="panel-header">
+          <div class="panel-title">Push for Promotion</div>
+          <div class="panel-sub">After a worked shift • ${remaining} left this week</div>
+        </div>
+
+        <div class="panel-actions">
+          <button class="panel-button primary" id="pushLowBtn" type="button">
+            Stay Late
+            <span class="btn-sub">Cost: -15 Energy • Pull: small</span>
+          </button>
+
+          <button class="panel-button" id="pushHighBtn" type="button">
+            Make an Impression
+            <span class="btn-sub">Cost: -20 Energy, -15 Hygiene, -$50 • Pull: large</span>
+          </button>
+
+          <button class="panel-button" id="pushBackBtn" type="button">Back</button>
+        </div>
+      </div>
+    `;
+  });
+
+  const lowBtn = (overlayContent || overlayPanel).querySelector("#pushLowBtn");
+  const highBtn = (overlayContent || overlayPanel).querySelector("#pushHighBtn");
+  const backBtn = (overlayContent || overlayPanel).querySelector("#pushBackBtn");
+
+  if (lowBtn) lowBtn.addEventListener("click", () => doAssistantMgrPush("low"));
+  if (highBtn) highBtn.addEventListener("click", () => doAssistantMgrPush("high"));
+  if (backBtn) backBtn.addEventListener("click", () => { closeOverlay(); updateUI(); });
+}
+
+function doAssistantMgrPush(kind) {
+  syncAssistantMgrPromoWeek();
+  if (!canAssistantMgrPushNow()) { closeOverlay(); updateUI(); return; }
+
+  if (kind === "low") {
+    player.energy -= 15;
+    const pullBonus = getAssistantMgrPlayerPullBonus();
+    player.assistantMgrTugPos = clamp((player.assistantMgrTugPos || 0) - (5 + pullBonus), -100, 100);
+    appendLog("You stay late and help close.");
+    showBanner("", "You stayed late.");
+  } else {
+    player.energy -= 20;
+    player.hygiene -= 15;
+    player.money -= 50;
+    const pullBonus = getAssistantMgrPlayerPullBonus();
+    player.assistantMgrTugPos = clamp((player.assistantMgrTugPos || 0) - (9 + pullBonus), -100, 100);
+    appendLog("You push yourself and try to make an impression.");
+    showBanner("", "You pushed hard.");
+  }
+
+  player.assistantMgrWeekPushes = (player.assistantMgrWeekPushes || 0) + 1;
+  player.assistantMgrPushedToday = true;
+  player.assistantMgrCanPushTonight = false;
+
+  // Track for UI flair (player last moved the bar).
+  player.assistantMgrLastMove = "player";
+
+  clampStats();
+  closeOverlay();
+  updateUI();
+  queueSave();
+}
+
+function resetAssistantMgrRace(opts = {}) {
+  const { reason = null, cooldownDays = 0, keepOpportunityShown = false } = opts;
+  if (reason) appendLog(reason);
+  player.assistantMgrApplied = false;
+  player.assistantMgrAppliedDay = 0;
+  player.assistantMgrStartDay = 0;
+  player.assistantMgrWeeksElapsed = 0;
+  player.assistantMgrWeeksTotal = 20;
+  player.assistantMgrTugPos = 0;
+  player.assistantMgrWeekPushes = 0;
+  player.assistantMgrPushedToday = false;
+  player.assistantMgrCanPushTonight = false;
+  syncAssistantMgrPromoWeek();
+  player.assistantMgrLastTimEvent = "";
+  player.assistantMgrProgress = 0;
+  player.assistantMgrRequired = 20;
+  player.assistantMgrWeekEventCount = 0;
+  player.assistantMgrWeekEventProgress = 0;
+  player.assistantMgrWorkedWedThisWeek = false;
+  player.assistantMgrLastWeekMessage = "";
+  player.assistantMgrCooldownDays = Math.max(player.assistantMgrCooldownDays, cooldownDays);
+  player.assistantMgrOpportunityShown = !!keepOpportunityShown;
+  player.assistantMgrWeekEventTarget = 0;
+  player.assistantMgrLastEventId = null;
+  player.assistantMgrWeekEventSeen = [];
+}
+
+function getAssistantMgrProgressText(progress) {
+  // If the race just started, hold the ambiguity.
+  if (player.assistantMgrWeeksElapsed <= 1) return "Too early to tell.";
+
+  const p = progress;
+  if (p <= 4) return "No one’s paying attention yet.";
+  if (p <= 9) return "Someone’s starting to notice my work.";
+  if (p <= 14) return "Is this enough?";
+  if (p <= 18) return "I might actually have a shot.";
+  if (p <= 21) return "I don’t know what else I could do.";
+  return "Surely I’ve done enough.";
+}
+
+
+function getAssistantMgrPlayerPullBonus() {
+  // Small, intuitive stat influence (never makes it free).
+  // Work Ethic + Charm both help you "pull" a little harder when you push.
+  let bonus = 0;
+  const we = player.workEthic || 0;
+  const ch = player.charm || 0;
+
+  if (we >= 10) bonus += 1;
+  if (we >= 15) bonus += 1;
+
+  if (ch >= 10) bonus += 1;
+  if (ch >= 15) bonus += 1;
+
+  // Cap so it doesn't explode.
+  return clamp(bonus, 0, 3);
+}
+
+function getAssistantMgrTugText(pos) {
+  // pos: -100 (You) .. +100 (Tim)
+  if ((player.assistantMgrWeeksElapsed || 0) <= 1) return "Too early to tell.";
+
+  if (pos >= 60) return "Tim is pulling ahead. You feel it.";
+  if (pos >= 30) return "Tim has momentum right now.";
+  if (pos >= 10) return "It’s leaning Tim’s way.";
+  if (pos > -10) return "It’s close. Too early to tell.";
+  if (pos > -30) return "You’re gaining ground.";
+  if (pos > -60) return "The manager is starting to notice you.";
+  return "It feels like you’re in the lead — for now.";
+}
+
+
+function getAssistantMgrFillPct() {
+  // Map to a cap slightly above the requirement so overperformance still feels full.
+  const cap = Math.max(player.assistantMgrRequired + 4, 22);
+  const pct = (player.assistantMgrProgress / cap) * 100;
+  return clamp(pct, 0, 100);
+}
+
+const ASSIST_MGR_EVENTS = [
+  {
+    id: 'close_shortstaff',
+    text: 'The shift is short-staffed, and closing is taking longer than expected.',
+    a: 'Stay late to help finish up.',
+    b: 'Leave when your shift ends.',
+    outcome: 'A' // often helps
+  },
+  {
+    id: 'manager_checkin',
+    text: 'The manager asks how things are going during a busy stretch.',
+    a: 'Mention a few issues you’ve noticed.',
+    b: 'Say things are fine and keep moving.',
+    outcome: 'EITHER' // messy
+  },
+  {
+    id: 'coworker_mistake',
+    text: 'A coworker skips a step that slows things down later.',
+    a: 'Fix it quietly and move on.',
+    b: 'Point it out so it doesn’t happen again.',
+    outcome: 'LOW' // small chance either way
+  },
+  {
+    id: 'rush_before_break',
+    text: 'An unexpected rush hits right before your scheduled break.',
+    a: 'Push through and delay your break.',
+    b: 'Take your break and return after.',
+    outcome: 'EITHER'
+  },
+  {
+    id: 'new_hire',
+    text: 'A new hire is struggling, slowing things down.',
+    a: 'Step in to help them get through the rush.',
+    b: 'Focus on keeping your station running smoothly.',
+    outcome: 'EITHER'
+  },
+  {
+    id: 'procedure_question',
+    text: 'You notice two people handling the same task differently.',
+    a: 'Ask the manager which way they prefer.',
+    b: 'Let it go and follow the flow.',
+    outcome: 'EITHER'
+  },
+  {
+    id: 'schedule_change',
+    text: 'The schedule changes last minute, affecting your plans.',
+    a: 'Adjust and work the shift.',
+    b: 'Say you can’t make the change.',
+    outcome: 'A' // often helps
+  },
+  {
+    id: 'quiet_moment',
+    text: 'Things slow down briefly during your shift.',
+    a: 'Use the time to clean or restock.',
+    b: 'Take a moment to sit and recover.',
+    outcome: 'A_SOMETIMES'
+  }
+];
+
+function assistantMgrChoiceGivesProgress(eventDef, choiceKey) {
+  const out = eventDef.outcome;
+  if (out == 'A') return choiceKey === 'A';
+  if (out == 'B') return choiceKey === 'B';
+  if (out == 'EITHER') return Math.random() < 0.5;
+  if (out == 'LOW') return Math.random() < 0.25;
+  if (out == 'A_SOMETIMES') return choiceKey === 'A' && Math.random() < 0.6;
+  return false;
+}
+
+function openAssistantMgrEvent(eventDef) {
+  openOverlay('assistant_event', () => {
+    return `
+      <div class="sidegig-panel">
+        <div class="panel-header">
+          <div class="panel-title">Work</div>
+          <div class="panel-sub">${eventDef.text}</div>
+        </div>
+        <div class="panel-actions">
+          <button class="panel-button" id="amEventA" type="button">${eventDef.a}</button>
+          <button class="panel-button" id="amEventB" type="button">${eventDef.b}</button>
+        </div>
+      </div>
+    `;
+  });
+
+  const onPick = (key) => {
+    const gives = assistantMgrChoiceGivesProgress(eventDef, key);
+    player.assistantMgrWeekEventCount += 1;
+    if (gives) player.assistantMgrWeekEventProgress += 1;
+    player.assistantMgrLastEventId = eventDef.id;
+    if (!Array.isArray(player.assistantMgrWeekEventSeen)) player.assistantMgrWeekEventSeen = [];
+    player.assistantMgrWeekEventSeen.push(eventDef.id);
+    closeOverlay();
+    updateUI();
+    queueSave();
+  };
+
+  const btnA = document.getElementById('amEventA');
+  const btnB = document.getElementById('amEventB');
+  if (btnA) btnA.onclick = () => onPick('A');
+  if (btnB) btnB.onclick = () => onPick('B');
+}
+
+function maybeTriggerAssistantMgrEventAfterWork() {
+  if (!isAssistantMgrRaceActive()) return false;
+
+  // Keep events weekly-limited.
+  if (typeof player.assistantMgrWeekEventTarget !== 'number' || player.assistantMgrWeekEventTarget <= 0) {
+    player.assistantMgrWeekEventTarget = 1 + Math.floor(Math.random() * 3); // 1–3
+  }
+  if (player.assistantMgrWeekEventCount >= player.assistantMgrWeekEventTarget) return false;
+
+  // For promotion testing, always trigger as long as we're under the weekly cap.
+  // (We can re-introduce randomness later once pacing feels right.)
+
+  // Pick an event not used this week, and not the same as last time.
+  const seen = new Set(Array.isArray(player.assistantMgrWeekEventSeen) ? player.assistantMgrWeekEventSeen : []);
+  let pool = ASSIST_MGR_EVENTS.filter(e => !seen.has(e.id) && e.id !== player.assistantMgrLastEventId);
+  if (pool.length === 0) pool = ASSIST_MGR_EVENTS.filter(e => e.id !== player.assistantMgrLastEventId);
+  const ev = pool[Math.floor(Math.random() * pool.length)];
+  if (!ev) return false;
+
+  openAssistantMgrEvent(ev);
+  return true;
+}
+
+function getTimWeeklyGain(weekNum, tugPosBefore) {
+  let min = 4, max = 6;
+  let isSurge = false;
+
+  // Tim opens strong to create early pressure.
+  if (weekNum >= 1 && weekNum <= 3) {
+    min = 8; max = 10;
+  } else if (weekNum >= 4 && weekNum <= 7) {
+    min = 3; max = 5;
+  } else if (weekNum >= 8 && weekNum <= 12) {
+    min = 4; max = 6;
+    // Occasional big week.
+    isSurge = (Math.random() < 0.33);
+    if (isSurge) { min = 8; max = 8; }
+  } else if (weekNum >= 13 && weekNum <= 17) {
+    min = 5; max = 7;
+    isSurge = (Math.random() < 0.25);
+    if (isSurge) { min = 10; max = 10; }
+  } else {
+    // Final review stretch (18–20)
+    min = 6; max = 9;
+    isSurge = (Math.random() < 0.33);
+    if (isSurge) { min = 10; max = 12; }
+  }
+
+  let gain = randInt(min, max);
+
+  // Light rubberbanding so the race stays tense but winnable.
+// If YOU are leading hard (tugPos very negative), Tim presses a bit.
+// If Tim is leading hard (tugPos very positive), he eases a bit.
+if (tugPosBefore < -30) gain += 2;
+if (tugPosBefore > 30) gain -= 2;
+
+// Extra clamp near extremes so it doesn't feel hopeless.
+if (tugPosBefore < -60) gain += 1;
+if (tugPosBefore > 60) gain -= 1;
+
+  gain = clamp(gain, 2, 14);
+  return { gain, isSurge: (gain >= 8) };
+}
+
+function assistantMgrWeeklyReview() {
+  if (!isAssistantMgrRaceActive()) return;
+
+  const weekNum = (player.assistantMgrWeeksElapsed || 0) + 1;
+  const total = player.assistantMgrWeeksTotal || 20;
+
+  const before = clamp(player.assistantMgrTugPos || 0, -100, 100);
+  const { gain, isSurge } = getTimWeeklyGain(weekNum, before);
+
+  // Tim pulls right.
+  player.assistantMgrTugPos = clamp(before + gain, -100, 100);
+
+  // Track for UI flair (Tim last moved the bar).
+  player.assistantMgrLastMove = "tim";
+
+  // Wednesday matters (meeting day).
+  if (player.assistantMgrWorkedWedThisWeek) {
+    player.assistantMgrTugPos = clamp(player.assistantMgrTugPos - 6, -100, 100);
+    appendLog("You showed up on Wednesday. It didn’t go unnoticed.");
+  }
+
+  // Weekly messaging.
+  player.assistantMgrLastWeekMessage = (weekNum <= 1) ? "Too early to tell." : "Another week passes.";
+
+  // Visible Tim event (surge weeks).
+  if (isSurge) {
+    player.assistantMgrLastTimEvent = "Tim had a big week. The manager noticed.";
+    showOrQueueModal(
+      "Tim",
+      "Tim had a big week.<br><br>The manager noticed.",
+      "OK",
+      () => { updateUI(); queueSave(); }
+    );
+  } else {
+    // Light, occasional Tim pressure (not spammy).
+    let note = "";
+    if ((player.assistantMgrTimChatterCooldown || 0) <= 0) {
+      const posNow = clamp(player.assistantMgrTugPos || 0, -100, 100);
+      const roll = Math.random();
+      if (roll < 0.18) {
+        if (posNow >= 25) note = "Tim keeps finding ways to stand out.";
+        else if (posNow <= -25) note = "Tim’s been quiet lately. Almost tense.";
+        else note = "You can feel the pressure building.";
+      }
+      if (note) player.assistantMgrTimChatterCooldown = 2; // wait a couple weeks
+    } else {
+      player.assistantMgrTimChatterCooldown -= 1;
+    }
+    player.assistantMgrLastTimEvent = note;
+    if (note) {
+      // Non-blocking flavor (no segment stealing).
+      showBanner("", "Tim: " + note);
+    }
+  }
+
+  // Reset weekly caps/flags.
+  player.assistantMgrWeeksElapsed = weekNum;
+  player.assistantMgrWeekPushes = 0;
+  player.assistantMgrWorkedWedThisWeek = false;
+
+  // Resolve at the end of 20 weeks.
+  if (player.assistantMgrWeeksElapsed >= total) {
+    const pos = clamp(player.assistantMgrTugPos || 0, -100, 100);
+
+    // Slight bias toward the player if it's close.
+    const playerWins = (pos < 10);
+
+    if (playerWins) {
+      player.isAssistantManager = true;
+      player.assistantMgrApplied = false;
+      player.assistantMgrLastWeekMessage = "They offered you the position.";
+      player.assistantMgrLastTimEvent = "";
+      showOrQueueModal(
+        "Promotion",
+        "They offered you the position.<br><br>The expectations change.<br>So does the pay.",
+        "OK",
+        () => { updateUI(); queueSave(); }
+      );
+      appendLog("<strong>They offered you the position.</strong> You’re now Assistant Manager.");
+      showBanner("success", "Promoted: Assistant Manager.");
+    } else {
+      player.assistantMgrCooldownDays = 14;
+      player.assistantMgrApplied = false;
+      player.assistantMgrLastWeekMessage = "They went another direction.";
+      player.assistantMgrLastTimEvent = "";
+      showOrQueueModal(
+        "Decision",
+        "They went another direction.<br><br>You still have your job.<br>Life goes on.",
+        "OK",
+        () => { updateUI(); queueSave(); }
+      );
+      appendLog("<strong>They went another direction.</strong> You can try again later.");
+      showBanner("error", "Not selected.");
+    }
+
+    // Reset weekly flags post resolution.
+    player.assistantMgrWeekPushes = 0;
+    player.assistantMgrWorkedWedThisWeek = false;
+    player.assistantMgrCanPushTonight = false;
+    player.assistantMgrPushedToday = false;
+  }
+}
+
+
+
+// --- Tug-of-war (Step 2 only: data + tick skeleton; not wired into gameplay yet) ---
+// The full tug-of-war system will replace the weekly-review + daily popups approach.
+// For now we only stage the state + a safe weekly tick helper so we can wire it gradually.
+function assistantMgrTugWeeklyTickSkeleton() {
+  if (!isAssistantMgrRaceActive()) return;
+
+  // Compute which promotion week we are in based on start day.
+  const daysSince = player.day - player.assistantMgrStartDay;
+  if (daysSince <= 0) return;
+  if (daysSince % 7 !== 0) return; // weekly boundary
+
+  const weekNum = Math.max(1, Math.floor(daysSince / 7));
+  // Placeholder: no movement yet (wired later). Kept to validate timing without UI changes.
+  // Example future fields:
+  // player.assistantMgrTugPos = clamp(player.assistantMgrTugPos + timGain, -100, 100);
+  // player.assistantMgrLastTimEvent = "";
+  void weekNum;
+}
+
+
+function isAssistantMgrOpportunityReady() {
+  // Gate: apartment + some time housed + shift lead experience + cooldown.
+  if (!player.hasApartment) return false;
+  if (!player.isShiftLead) return false;
+  if (player.isAssistantManager) return false;
+  if (player.assistantMgrApplied) return false;
+  if (player.assistantMgrCooldownDays > 0) return false;
+  if (player.apartmentDaysOwned < 7) return false; // 1 week
+  if (player.leadShiftsWorked < 8) return false;
+  return true;
 }
 
 function openSideGigPanel() {
@@ -2137,6 +3000,31 @@ function doCookingAction() {
   if (player.energy < energyCost) {
     showBanner("error", "You’re too exhausted to cook.");
     appendLog("You try to psych yourself up to cook, but you're too exhausted.");
+    return;
+  }
+
+    // Time guard: only allow cooking if there is enough day remaining.
+  const segsNeeded = getCookingTimeCostSegments();
+
+  // Cooking that takes the "rest of the day" should be started in the Morning
+  // (prevents doing an all-day action late in the day).
+  if (segsNeeded >= 3 && player.segmentIndex > 0) {
+    showBanner("error", "Not enough time left today.");
+    appendLog("You consider cooking, but there isn't enough time left in the day to finish.");
+    return;
+  }
+
+  // If cooking takes 2 segments, you can only start in Morning or Midday.
+  if (segsNeeded === 2 && player.segmentIndex > 1) {
+    showBanner("error", "Not enough time left today.");
+    appendLog("You consider cooking, but there isn't enough time left in the day to finish.");
+    return;
+  }
+
+  // If cooking takes 1 segment, you can't start on Night.
+  if (segsNeeded === 1 && player.segmentIndex >= 3) {
+    showBanner("error", "Not enough time left today.");
+    appendLog("You consider cooking, but it's too late to start tonight.");
     return;
   }
 
@@ -2507,6 +3395,17 @@ function renderActions() {
   // Night: different if you have an apartment
   if (segName === "Night") {
     if (player.hasApartment) {
+      // Promotion push (Night-only) — available after a worked shift.
+      if (canAssistantMgrPushNow()) {
+        btn(
+          "Push for Promotion",
+          "Spend yourself to gain ground",
+          openAssistantMgrPushPanel,
+          false,
+          "After a worked shift. Max 2 pushes per week. Does not consume a segment."
+        );
+      }
+
       btn(
         "Sleep in Apartment",
         "Recover overnight",
@@ -2599,11 +3498,19 @@ function renderActions() {
       // Weekday: work is only available in the Morning, but we keep a disabled placeholder
       // later in the day so buttons don't jump around.
       if (segName === "Morning") {
-        btn(player.isShiftLead ? "Work Lead Shift" : "Work Fast Food Shift",
-            "Takes all day, good pay", doWorkShift, true,
-            (player.isShiftLead
-              ? "Work a lead shift. Earn $33–$44. Costs: -30 Hunger, -45 Energy, -19 Hygiene. Takes the whole day."
-              : "Work a shift. Earn $26–$34. Costs: -30 Hunger, -45 Energy, -22 Hygiene. Takes the whole day."));
+        btn(
+          player.isShiftLead ? "Work Lead Shift" : "Work Fast Food Shift",
+          player.hasReliableCar ? "Takes 2 segments, good pay" : "Takes all day, good pay",
+          doWorkShift,
+          true,
+          (player.isShiftLead
+            ? (player.hasReliableCar
+                ? "Work a lead shift. Earn $33–$44. Costs: -30 Hunger, -45 Energy, -19 Hygiene. Time: 2 segments."
+                : "Work a lead shift. Earn $33–$44. Costs: -30 Hunger, -45 Energy, -19 Hygiene. Takes the whole day.")
+            : (player.hasReliableCar
+                ? "Work a shift. Earn $26–$34. Costs: -30 Hunger, -45 Energy, -22 Hygiene. Time: 2 segments."
+                : "Work a shift. Earn $26–$34. Costs: -30 Hunger, -45 Energy, -22 Hygiene. Takes the whole day."))
+        );
       } else {
         if (player.workedThisMorning) {
           btn(player.isShiftLead ? "Work Lead Shift" : "Work Fast Food Shift",
@@ -2636,20 +3543,29 @@ function renderActions() {
     btn("Rest", "Recover a little energy at home", doRest, false);
     btn("Wash Up", "Restore hygiene (important for work)", doWash, false);
     btn("Recreation...", "Fishing, Movies, Vacation", openRecreationPanel, false);
+    btn("Vehicles", "Buy a car (apartment tier)", openVehiclesPanel, false, "Purchase vehicles. A reliable car makes your work shift take 2 segments instead of all day.");
+    btn("Assets", "View what you own", openAssetsPanel, false, "See your apartment and any vehicles you’ve purchased.");
+
+    // Assistant Manager (UI shell): appears after the opportunity notice.
+    if (player.assistantMgrApplied) {
+      btn("Work Progress", "Assistant manager consideration", openAssistantManagerProgressPanel, false);
+    } else if (player.assistantMgrOpportunityShown && player.assistantMgrCooldownDays === 0 && !player.isAssistantManager) {
+      btn("Apply for Assistant Manager", "Consideration for a higher role", openAssistantManagerApplyPanel, false);
+    }
     {
     const segsNeeded = getCookingTimeCostSegments();
     const remaining = 3 - player.segmentIndex; // segments left before Night
     let disabledReason = "";
     if (player.segmentIndex >= 3) {
       disabledReason = "Too late to start a side gig tonight.";
+    } else if (segsNeeded >= 3 && player.segmentIndex > 0) {
+      disabledReason = "Not enough time left — cooking takes the rest of the day. Start in the morning.";
     } else if (segsNeeded === 2 && remaining < 2) {
       disabledReason = "Not enough time left today — cooking takes 2 segments (based on Fitness).";
     } else if (segsNeeded === 1 && remaining < 1) {
       disabledReason = "Not enough time left today.";
-    } else if (segsNeeded >= 3 && remaining < 1) {
-      disabledReason = "Not enough time left today.";
     }
-    btn("Side Gig: Cooking...", "Cook for extra cash", openSideGigPanel, false,
+btn("Side Gig: Cooking...", "Cook for extra cash", openSideGigPanel, false,
         "Costs $10 + energy. Time: " + getCookingTimeCostText() + ".",
         disabledReason || null);
   }
