@@ -214,7 +214,7 @@ const player = {
   // Hope changes accumulate during the day and apply after you sleep (end of day),
   // except for major setbacks (fired / apartment lost) which set hope immediately.
   hopePending: 0,
-  money: 0,
+  money: 5000,
 
   workEthic: 0,
   intelligence: 0,
@@ -1396,16 +1396,6 @@ function recordMorningPassIfNoWork(prevSegmentIndex) {
   // Sundays are a guaranteed day off (no work expected, no penalty).
   if (player.weekDayIndex === 6) {
     player.workedThisMorning = false;
-  // Promotion (tug-of-war) — week boundary reset for push cap.
-  if (isAssistantMgrRaceActive()) {
-    const daysSince = player.day - player.assistantMgrStartDay;
-    const weeks = Math.floor(daysSince / 7);
-    if (weeks !== player.assistantMgrWeeksElapsed) {
-      player.assistantMgrWeeksElapsed = weeks;
-      player.assistantMgrWeekPushes = 0;
-      player.assistantMgrWorkedWedThisWeek = false;
-    }
-  }
     return;
   }
 
@@ -1502,8 +1492,6 @@ function handleNewDay() {
   player.weekDayIndex = (player.weekDayIndex + 1) % 7;
   if (player.weekDayIndex === 0) {
     player.missedWorkThisWeek = 0;
-    // Promotion pushes reset each work week.
-    player.assistantMgrWeekPushes = 0;
     appendLog("<em>A new work week begins.</em>");
   }
   player.workedThisMorning = false;
@@ -1889,7 +1877,11 @@ function doWorkShift() {
   adjustHunger(-30);
   player.energy -= 45;
   // Working is grimy. (Increased hygiene impact by +4)
-  player.hygiene -= player.isShiftLead ? 19 : 22;
+  if (player.isAssistantManager) {
+    player.hygiene -= 18;
+  } else {
+    player.hygiene -= player.isShiftLead ? 19 : 22;
+  }
   // Working doesn't instantly fix morale; hope settles after sleep.
   addHope(0);
   player.shiftsWorked += 1;
@@ -2321,8 +2313,10 @@ function openAssistantManagerApplyPanel() {
           <div class="panel-title">Assistant Manager Consideration</div>
           <div class="panel-sub">
             This isn’t automatic.<br><br>
-            They’re watching consistency, reliability, and how you handle pressure.<br><br>
-            Experience and how you carry yourself can help — but consistency matters more.<br><br>
+            Once you apply, the next <strong>20 weeks</strong> become a race.<br>
+            Tim is competing too — and the bar can drift his way if you coast.<br><br>
+            After you work a shift, you may get a <strong>Push for Promotion</strong> option at night.<br>
+            It costs energy (and sometimes money), but it can pull you back into the lead.<br><br>
             Staff meetings usually happen on Wednesdays.<br><br>
             <strong>Progress is reviewed weekly.</strong>
           </div>
@@ -2514,7 +2508,9 @@ function doAssistantMgrPush(kind) {
   if (kind === "low") {
     player.energy -= 15;
     const pullBonus = getAssistantMgrPlayerPullBonus();
-    player.assistantMgrTugPos = clamp((player.assistantMgrTugPos || 0) - (5 + pullBonus), -100, 100);
+    // Balance: small pushes should be maintenance, not a win button.
+    // Reduced by ~25% from the original.
+    player.assistantMgrTugPos = clamp((player.assistantMgrTugPos || 0) - (4 + pullBonus), -100, 100);
     appendLog("You stay late and help close.");
     showBanner("", "You stayed late.");
   } else {
@@ -2782,8 +2778,13 @@ if (tugPosBefore > 30) gain -= 2;
 if (tugPosBefore < -60) gain += 1;
 if (tugPosBefore > 60) gain -= 1;
 
-  gain = clamp(gain, 2, 14);
-  return { gain, isSurge: (gain >= 8) };
+  // Balance pass (per playtest): make Tim significantly stronger.
+  // We intentionally double his pull to force meaningful engagement.
+  gain = gain * 2;
+
+  // Keep within a sane range for the -100..100 bar.
+  gain = clamp(gain, 4, 28);
+  return { gain, isSurge: (gain >= 16) };
 }
 
 function assistantMgrWeeklyReview() {
@@ -3395,7 +3396,16 @@ function renderActions() {
   // Night: different if you have an apartment
   if (segName === "Night") {
     if (player.hasApartment) {
+      btn(
+        "Sleep in Apartment",
+        "Recover overnight",
+        doApartmentSleep,
+        true,
+        "Gain: +30 Energy, +10 Hygiene, +1 Hope. Time: Night."
+      );
+
       // Promotion push (Night-only) — available after a worked shift.
+      // UI polish: keep Sleep on the left and render Push on the right.
       if (canAssistantMgrPushNow()) {
         btn(
           "Push for Promotion",
@@ -3405,14 +3415,6 @@ function renderActions() {
           "After a worked shift. Max 2 pushes per week. Does not consume a segment."
         );
       }
-
-      btn(
-        "Sleep in Apartment",
-        "Recover overnight",
-        doApartmentSleep,
-        true,
-        "Gain: +30 Energy, +10 Hygiene, +1 Hope. Time: Night."
-      );
     } else {
       btn(
         "Try Shelter",
@@ -3498,18 +3500,29 @@ function renderActions() {
       // Weekday: work is only available in the Morning, but we keep a disabled placeholder
       // later in the day so buttons don't jump around.
       if (segName === "Morning") {
+        const isAM = !!player.isAssistantManager;
+        const workLabel = isAM ? "Work Assistant Manager Shift" : (player.isShiftLead ? "Work Lead Shift" : "Work Fast Food Shift");
+        const workSub = player.hasReliableCar ? "Takes 2 segments, good pay" : "Takes all day, good pay";
+
+        // Tooltip text should reflect the current role.
+        const workTip = isAM
+          ? (player.hasReliableCar
+              ? "Work an assistant manager shift. Earn $60–$80. Costs: -30 Hunger, -45 Energy, -18 Hygiene. Time: 2 segments."
+              : "Work an assistant manager shift. Earn $60–$80. Costs: -30 Hunger, -45 Energy, -18 Hygiene. Takes the whole day.")
+          : (player.isShiftLead
+              ? (player.hasReliableCar
+                  ? "Work a lead shift. Earn $33–$44. Costs: -30 Hunger, -45 Energy, -19 Hygiene. Time: 2 segments."
+                  : "Work a lead shift. Earn $33–$44. Costs: -30 Hunger, -45 Energy, -19 Hygiene. Takes the whole day.")
+              : (player.hasReliableCar
+                  ? "Work a shift. Earn $26–$34. Costs: -30 Hunger, -45 Energy, -22 Hygiene. Time: 2 segments."
+                  : "Work a shift. Earn $26–$34. Costs: -30 Hunger, -45 Energy, -22 Hygiene. Takes the whole day."));
+
         btn(
-          player.isShiftLead ? "Work Lead Shift" : "Work Fast Food Shift",
-          player.hasReliableCar ? "Takes 2 segments, good pay" : "Takes all day, good pay",
+          workLabel,
+          workSub,
           doWorkShift,
           true,
-          (player.isShiftLead
-            ? (player.hasReliableCar
-                ? "Work a lead shift. Earn $33–$44. Costs: -30 Hunger, -45 Energy, -19 Hygiene. Time: 2 segments."
-                : "Work a lead shift. Earn $33–$44. Costs: -30 Hunger, -45 Energy, -19 Hygiene. Takes the whole day.")
-            : (player.hasReliableCar
-                ? "Work a shift. Earn $26–$34. Costs: -30 Hunger, -45 Energy, -22 Hygiene. Time: 2 segments."
-                : "Work a shift. Earn $26–$34. Costs: -30 Hunger, -45 Energy, -22 Hygiene. Takes the whole day."))
+          workTip
         );
       } else {
         if (player.workedThisMorning) {
