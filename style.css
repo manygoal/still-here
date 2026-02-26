@@ -1268,3 +1268,18 @@ button:focus-visible {
   35%{ transform: translateX(-50%) scale(1.15); }
   100%{ transform: translateX(-50%) scale(1.0); }
 }
+
+
+/* Choice/Promo overlays: quick HUD line */
+.panel-hud{
+  margin-top: 6px;
+  font-size: 13px;
+  opacity: 0.9;
+}
+.panel-button.disabled{
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.panel-button.disabled:hover{
+  transform: none;
+}

@@ -261,21 +261,40 @@ const player = {
   assistantMgrWeekEventSeen: [],
 
   // Assistant Manager (tug-of-war) — Step 2: data + tick skeleton (not wired yet)
-  assistantMgrWeeksTotal: 20,
+  assistantMgrWeeksTotal: 15,
   assistantMgrTugPos: 0,              // -100 (You) .. +100 (Tim)
   assistantMgrWeekPushes: 0,          // resets weekly
   assistantMgrPushWeekIndex: -1,   // promo-week index to enforce 2 pushes/week
   assistantMgrPushedToday: false,     // resets daily
   assistantMgrCanPushTonight: false,  // set true after a worked shift
   assistantMgrLastTimEvent: "",
-  assistantMgrLastMove: "", // 'player' | 'tim' for bar pulse
+  assistantMgrLastMove: "", // 'player' | 'tim' for bar
+
+  // Promotion race special events (rare, during the 15-week race)
+  assistantMgrEventLockWeek: -1,        // prevents multiple special events in same promo-week
+  assistantMgrRegisterEventDone: false,
+  assistantMgrRegisterStoleMoney: false,
+  assistantMgrRegisterRumorWeek: -1,    // promo-week number (1-based) when rumor triggers
+  assistantMgrRegisterRumorShown: false,
+  assistantMgrCreditTheftEventDone: false,
+  assistantMgrFinalProjectEventDone: false,
+
+  // Promotion decision ceremony (week 15 weekend -> Monday)
+  assistantMgrFinalWeekendNoticeShown: false,
+  assistantMgrDecisionPending: false,
+  assistantMgrDecisionOutcome: "",
+  assistantMgrLastPaidWorkWeekSerial: -1, // "win" | "lose"
+  assistantMgrDecisionShown: false,
+
   assistantMgrTimChatterCooldown: 0,
   isAssistantManager: false,
+  lastContractSignature: "",
   leadShiftsWorked: 0,
   apartmentDaysOwned: 0,
 
   // Weekly work tracking
   weekDayIndex: 0,          // 0-6, Monday-ish
+  workWeekSerial: 0,       // increments each Monday for weekly pay / tracking
   missedWorkThisWeek: 0,
   workedThisMorning: false,
   // Some actions can consume your morning without counting as a no-show.
@@ -941,7 +960,215 @@ function openMessageOverlay(title, message, okLabel = "OK", onClose = null) {
 
 
 
-// Game Over overlay (clear reason + restart loop)
+
+// Simple 2+ choice overlay (used for rare promotion events)
+function openChoiceOverlay(title, messageHtml, choices) {
+  openOverlay("choice", () => {
+    const e = Math.max(0, Math.floor(player.energy || 0));
+    const h = Math.max(0, Math.floor(player.hygiene || 0));
+    const cash = Math.max(0, Math.floor(player.money || 0));
+
+    const buttons = (choices || []).map((c, i) => {
+      const clsBase = c.primary ? "panel-button primary" : "panel-button";
+      const reqE = (typeof c.reqEnergy === "number") ? c.reqEnergy : 0;
+      const reqH = (typeof c.reqHygiene === "number") ? c.reqHygiene : 0;
+      const req$ = (typeof c.reqMoney === "number") ? c.reqMoney : 0;
+
+      const disabled = (e < reqE) || (h < reqH) || (cash < req$);
+      const cls = disabled ? (clsBase + " disabled") : clsBase;
+      const disAttr = disabled ? "disabled" : "";
+      return `<button class="${cls}" data-choice="${i}" type="button" ${disAttr}>${c.label}</button>`;
+    }).join("");
+
+    return `
+      <div class="sidegig-panel">
+        <div class="panel-header">
+          <div class="panel-title">${title}</div>
+          <div class="panel-hud">Energy: <strong>${e}</strong> • Hygiene: <strong>${h}</strong> • Cash: <strong>$${cash}</strong></div>
+          <div class="panel-sub">${messageHtml}</div>
+        </div>
+        <div class="panel-actions">
+          ${buttons}
+        </div>
+      </div>
+    `;
+  });
+
+  const btns = overlayPanel.querySelectorAll("[data-choice]");
+  btns.forEach(btn => {
+    btn.addEventListener("click", () => {
+      if (btn.hasAttribute("disabled")) return;
+      const idx = parseInt(btn.getAttribute("data-choice"), 10);
+      const choice = (choices || [])[idx];
+      closeOverlay();
+      if (choice && typeof choice.onChoose === "function") choice.onChoose();
+    });
+  });
+}
+
+function openSignatureOverlay(title, bodyHtml, onDone) {
+  openOverlay("signature", () => {
+    return `
+      <div class="sidegig-panel">
+        <div class="panel-header">
+          <div class="panel-title">${title}</div>
+          <div class="panel-sub">${bodyHtml}</div>
+        </div>
+
+        <div class="panel-actions">
+          <div style="margin-bottom:10px;">
+            <canvas id="sigCanvas" width="320" height="140" style="width:100%; max-width:360px; border:1px solid rgba(255,255,255,0.25); border-radius:10px; background:rgba(0,0,0,0.15); touch-action:none;"></canvas>
+            <div style="margin-top:8px; font-size:12px; opacity:0.85;">Draw your signature (optional).</div>
+          </div>
+
+          <button class="panel-button" id="sigClearBtn" type="button">Delete Signature</button>
+          <button class="panel-button primary" id="sigDoneBtn" type="button">Sign</button>
+        </div>
+      </div>
+    `;
+  });
+
+  const canvas = overlayPanel.querySelector("#sigCanvas");
+  const clearBtn = overlayPanel.querySelector("#sigClearBtn");
+  const doneBtn = overlayPanel.querySelector("#sigDoneBtn");
+
+  const ctx = canvas.getContext("2d");
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "rgba(255,255,255,0.95)";
+
+  let drawing = false;
+  let didDraw = false;
+
+  const getPos = (ev) => {
+    const rect = canvas.getBoundingClientRect();
+    const clientX = (ev.touches && ev.touches[0]) ? ev.touches[0].clientX : ev.clientX;
+    const clientY = (ev.touches && ev.touches[0]) ? ev.touches[0].clientY : ev.clientY;
+    return {
+      x: (clientX - rect.left) * (canvas.width / rect.width),
+      y: (clientY - rect.top) * (canvas.height / rect.height),
+    };
+  };
+
+  const start = (ev) => {
+    drawing = true;
+    const p = getPos(ev);
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    ev.preventDefault?.();
+  };
+  const move = (ev) => {
+    if (!drawing) return;
+    const p = getPos(ev);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    didDraw = true;
+    ev.preventDefault?.();
+  };
+  const end = (ev) => {
+    drawing = false;
+    ev.preventDefault?.();
+  };
+
+  canvas.addEventListener("pointerdown", start);
+  canvas.addEventListener("pointermove", move);
+  canvas.addEventListener("pointerup", end);
+  canvas.addEventListener("pointercancel", end);
+
+  // Touch fallback (some Android WebViews)
+  canvas.addEventListener("touchstart", start, { passive: false });
+  canvas.addEventListener("touchmove", move, { passive: false });
+  canvas.addEventListener("touchend", end, { passive: false });
+
+  clearBtn.addEventListener("click", () => {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    didDraw = false;
+  });
+
+  doneBtn.addEventListener("click", () => {
+    let dataUrl = "";
+    try {
+      if (didDraw) dataUrl = canvas.toDataURL("image/png");
+    } catch (e) { /* ignore */ }
+
+    closeOverlay();
+    if (typeof onDone === "function") onDone(dataUrl);
+  });
+}
+
+
+function maybeShowAssistantMgrFinalWeekendNotice() {
+  if (!isAssistantMgrRaceActive()) return;
+  if (player.assistantMgrFinalWeekendNoticeShown) return;
+  const weekNum = getAssistantMgrPromoWeekNumber();
+  const totalWeeks = player.assistantMgrWeeksTotal || 15;
+  // Show on Saturday night of the final promo week (0=Mon ... 5=Sat)
+  if (weekNum === totalWeeks && player.weekDayIndex === 5 && player.segmentIndex === 3) {
+    player.assistantMgrFinalWeekendNoticeShown = true;
+    showOrQueueModal(
+      "Final Review",
+      "Management will make a decision on Monday.<br><br>This weekend is your last chance to leave an impression.",
+      "OK",
+      () => { updateUI(); queueSave(); }
+    );
+  }
+}
+
+function openAssistantMgrDecisionCeremony(onAfter) {
+  if (!player.assistantMgrDecisionPending || player.assistantMgrDecisionShown) return;
+  player.assistantMgrDecisionShown = true;
+
+  const outcome = player.assistantMgrDecisionOutcome || "lose";
+
+  if (outcome === "win") {
+    openSignatureOverlay(
+      "Assistant Manager Contract",
+      "FAST FOOD STORE EMPLOYMENT AGREEMENT<br><br>" +
+      "<strong>Position:</strong> Assistant Manager<br>" +
+      "<strong>Pay:</strong> Weekly pay <strong>$420–$480</strong><br>" +
+      "<strong>Payday:</strong> Saturdays (paid after your shift)<br><br>" +
+      "By signing below, you accept the role and agree to the expectations of the position.<br><br>" +
+      "<em>Higher pay. Higher expectations.</em><br><br>" +
+      "Signature:",
+      (sigDataUrl) => {
+        // Apply promotion now.
+        player.isAssistantManager = true;
+        player.assistantMgrDecisionPending = false;
+        player.assistantMgrDecisionOutcome = "";
+        player.assistantMgrLastWeekMessage = "They offered you the position.";
+        player.assistantMgrLastTimEvent = "";
+        if (sigDataUrl) player.lastContractSignature = sigDataUrl;
+
+        appendLog("<strong>They offered you the position.</strong> You’re now Assistant Manager.");
+        showBanner("success", "Promoted: Assistant Manager.");
+        updateUI(); queueSave();
+
+        if (typeof onAfter === "function") onAfter();
+      }
+    );
+  } else {
+    // Not selected
+    showOrQueueModal(
+      "Decision",
+      "They went another direction.<br><br>You still have your job.<br>Life goes on.",
+      "OK",
+      () => {
+        player.assistantMgrCooldownDays = 14;
+        player.assistantMgrDecisionPending = false;
+        player.assistantMgrDecisionOutcome = "";
+        player.assistantMgrLastWeekMessage = "They went another direction.";
+        player.assistantMgrLastTimEvent = "";
+
+        appendLog("<strong>They went another direction.</strong> You can try again later.");
+        showBanner("error", "Not selected.");
+        updateUI(); queueSave();
+        if (typeof onAfter === "function") onAfter();
+      }
+    );
+  }
+}
+
 function openGameOverOverlay(reasonTitle, reasonHtml) {
   openOverlay("gameover", () => {
     const dayLine = `Day ${player.day} • ${segments[player.segmentIndex] || ""}`.trim();
@@ -1166,6 +1393,8 @@ function checkForBurnout() {
 
 // --- UI ---
 function updateUI() {
+  maybeShowAssistantMgrFinalWeekendNotice();
+
   const segName = segments[player.segmentIndex];
   dayDisplay.textContent = player.day;
   if (weekdayDisplay) {
@@ -1491,6 +1720,7 @@ function handleNewDay() {
   syncAssistantMgrPromoWeek();
   player.weekDayIndex = (player.weekDayIndex + 1) % 7;
   if (player.weekDayIndex === 0) {
+    player.workWeekSerial = (player.workWeekSerial || 0) + 1;
     player.missedWorkThisWeek = 0;
     appendLog("<em>A new work week begins.</em>");
   }
@@ -1563,6 +1793,23 @@ function nextSegment() {
     // when leaving Morning, record no-show if you didn't work
     recordMorningPassIfNoWork(prevSegmentIndex);
     player.segmentIndex += 1;
+
+    // Promotion ceremony: on Saturday night of the final week, warn that a decision comes Monday.
+    if (player.segmentIndex === 3 && isAssistantMgrRaceActive()) {
+      const weekNum = getAssistantMgrPromoWeekNumber();
+      const totalWeeks = player.assistantMgrWeeksTotal || 15;
+      // weekDayIndex: 0=Mon ... 5=Sat ... 6=Sun
+      if (weekNum === totalWeeks && player.weekDayIndex === 5 && !player.assistantMgrFinalWeekendNoticeShown) {
+        player.assistantMgrFinalWeekendNoticeShown = true;
+        showOrQueueModal(
+          "Final Review",
+          "Management will make a decision on Monday.<br><br>This weekend is your last chance to leave an impression.",
+          "OK",
+          () => { updateUI(); queueSave(); }
+        );
+      }
+    }
+
 
     // Burnout (apartment tier): you can't do daytime actions—your day effectively skips to Night.
     if (player.hasApartment && player.burnoutDaysRemaining > 0 && player.segmentIndex < 3) {
@@ -1864,15 +2111,39 @@ function doWorkShift() {
     return;
   }
 
-  let wage;
+  // If the promotion decision is pending, show it the next time you return to work.
+  if (player.assistantMgrDecisionPending && !player.assistantMgrDecisionShown) {
+    openAssistantMgrDecisionCeremony(() => {
+      // Try again after the ceremony (now promoted or cooled down).
+      doWorkShift();
+    });
+    return;
+  }
+
+
+  
+  let wage = 0;
+  // Assistant Manager is paid weekly on Saturdays after work.
   if (player.isAssistantManager) {
-    wage = Math.floor(Math.random() * 21) + 60; // 60–80
+    const isSaturday = (player.weekDayIndex === 5);
+    const wk = (player.workWeekSerial || 0);
+    if (isSaturday && player.assistantMgrLastPaidWorkWeekSerial !== wk) {
+      wage = Math.floor(Math.random() * 61) + 420; // 420–480 weekly pay
+      player.assistantMgrLastPaidWorkWeekSerial = wk;
+      player.money += wage;
+      appendLog(`<strong>Payday.</strong> You received $${wage} (weekly pay).`);
+      showBanner("success", `Weekly pay received: $${wage}`);
+    } else {
+      appendLog("You worked your Assistant Manager shift. Payday is Saturday.");
+    }
   } else if (!player.isShiftLead) {
     wage = Math.floor(Math.random() * 9) + 26; // 26–34
+    player.money += wage;
   } else {
     wage = Math.floor(Math.random() * 12) + 33; // 33–44
+    player.money += wage;
   }
-  player.money += wage;
+
 
   adjustHunger(-30);
   player.energy -= 45;
@@ -1905,6 +2176,12 @@ function doWorkShift() {
     player.assistantMgrPushedToday = false;
   }
   checkForBurnout();
+  // Rare promotion race events (adds flare during the race)
+  if (maybeTriggerAssistantMgrPromoEventAfterWork()) {
+    updateUI();
+    queueSave();
+    return;
+  }
   // Possible coworker beat (post-shift modal before sleep selection)
   const openedTim = maybeTriggerTimEvent("work");
   if (!openedTim) {
@@ -2313,7 +2590,7 @@ function openAssistantManagerApplyPanel() {
           <div class="panel-title">Assistant Manager Consideration</div>
           <div class="panel-sub">
             This isn’t automatic.<br><br>
-            Once you apply, the next <strong>20 weeks</strong> become a race.<br>
+            Once you apply, the next <strong>15 weeks</strong> become a race.<br>
             Tim is competing too — and the bar can drift his way if you coast.<br><br>
             After you work a shift, you may get a <strong>Push for Promotion</strong> option at night.<br>
             It costs energy (and sometimes money), but it can pull you back into the lead.<br><br>
@@ -2338,7 +2615,7 @@ function openAssistantManagerApplyPanel() {
     player.assistantMgrStartDay = player.day;
 
     player.assistantMgrWeeksElapsed = 0;
-    player.assistantMgrWeeksTotal = 20;
+    player.assistantMgrWeeksTotal = 15;
     player.assistantMgrTugPos = 0;
 
     player.assistantMgrWeekPushes = 0;
@@ -2366,7 +2643,7 @@ function openAssistantManagerProgressPanel() {
     const pos = clamp(player.assistantMgrTugPos || 0, -100, 100);
     const pct = ((pos + 100) / 200) * 100; // 0..100
     const week = player.assistantMgrWeeksElapsed || 0;
-    const total = player.assistantMgrWeeksTotal || 20;
+    const total = player.assistantMgrWeeksTotal || 15;
 
     const statusText = (player.assistantMgrLastWeekMessage && player.assistantMgrLastWeekMessage.length)
       ? player.assistantMgrLastWeekMessage
@@ -2442,6 +2719,183 @@ function syncAssistantMgrPromoWeek() {
     player.assistantMgrWeekPushes = 0;
     player.assistantMgrWorkedWedThisWeek = false;
   }
+}
+
+
+// --- Promotion race special events (rare) ---
+function getAssistantMgrPromoWeekNumber() {
+  return getAssistantMgrPromoWeekIndex() + 1; // 1-based for readability
+}
+
+function lockAssistantMgrEventThisWeek() {
+  player.assistantMgrEventLockWeek = getAssistantMgrPromoWeekIndex();
+}
+
+function canTriggerAssistantMgrEventThisWeek() {
+  return (player.assistantMgrEventLockWeek !== getAssistantMgrPromoWeekIndex());
+}
+
+function applyAssistantMgrTugShift(delta) {
+  player.assistantMgrTugPos = clamp((player.assistantMgrTugPos || 0) + delta, -100, 100);
+}
+
+// Try to open one rare promotion event after a work shift.
+// Returns true if it opened an overlay (caller should stop other popups).
+function maybeTriggerAssistantMgrPromoEventAfterWork() {
+  if (!isAssistantMgrRaceActive()) return false;
+
+  const week = getAssistantMgrPromoWeekNumber();
+  const total = player.assistantMgrWeeksTotal || 15;
+
+  // Never fire special events in the last 2 weeks (keeps outcomes fair).
+  if (week > (total - 2)) return false;
+
+  if (!canTriggerAssistantMgrEventThisWeek()) return false;
+
+  // 1) Delayed rumor consequence (if you stole money earlier)
+  if (player.assistantMgrRegisterRumorWeek === week && !player.assistantMgrRegisterRumorShown) {
+    player.assistantMgrRegisterRumorShown = true;
+    lockAssistantMgrEventThisWeek();
+
+    // Massive Tim swing: at least 2x big push (big push is ~9+bonus; use 18 flat).
+    applyAssistantMgrTugShift(+18);
+    player.assistantMgrLastMove = "tim";
+    player.assistantMgrLastTimEvent = "Rumors spread at work. People are watching you.";
+
+    openMessageOverlay(
+      "Work Rumors",
+      "Someone reported missing money from the register.<br><br>They don’t know who took it — but rumors are starting to spread, and some people are saying it might have been you.<br><br><strong>This caused a major shift toward Tim.</strong>",
+      "OK",
+      () => { updateUI(); queueSave(); }
+    );
+    return true;
+  }
+
+  // 2) Register temptation (Weeks 6–10 only)
+  if (!player.assistantMgrRegisterEventDone && week >= 6 && week <= 10) {
+    player.assistantMgrRegisterEventDone = true;
+    lockAssistantMgrEventThisWeek();
+
+    openChoiceOverlay(
+      "Closing Shift",
+      "You’re closing alone. The register is over by $150.",
+      [
+        {
+          label: "Report it",
+          primary: true,
+          onChoose: () => {
+            // Small credibility boost (roughly a small push).
+            applyAssistantMgrTugShift(-4);
+            player.assistantMgrLastMove = "player";
+            appendLog("You reported the extra money. It felt like the right thing to do.");
+            showBanner("", "You did the right thing.");
+            updateUI(); queueSave();
+          }
+        },
+        {
+          label: "Pocket it (+$150)",
+          primary: false,
+          onChoose: () => {
+            player.money += 150;
+            player.assistantMgrRegisterStoleMoney = true;
+
+            // Rumor hits one week later, but only if that won't land in the last 2 weeks.
+            const rumorWeek = week + 1;
+            if (rumorWeek <= (total - 2)) {
+              player.assistantMgrRegisterRumorWeek = rumorWeek;
+            } else {
+              player.assistantMgrRegisterRumorWeek = -1;
+            }
+
+            appendLog("You pocketed the extra cash and told yourself it was harmless.");
+            showBanner("", "+$150");
+            updateUI(); queueSave();
+          }
+        }
+      ]
+    );
+    return true;
+  }
+
+  // 3) Credit theft event (mid-race)
+  if (!player.assistantMgrCreditTheftEventDone && week >= 7 && week <= 11) {
+    player.assistantMgrCreditTheftEventDone = true;
+    lockAssistantMgrEventThisWeek();
+
+    openChoiceOverlay(
+      "Meeting",
+      "In the meeting, Tim presents an idea that was yours.<br><br>People nod like it came from him.",
+      [
+        {
+          label: "Speak up (-15 Energy)",
+          primary: true,
+          reqEnergy: 15,
+          onChoose: () => {
+            player.energy -= 15;
+            applyAssistantMgrTugShift(-10);
+            player.assistantMgrLastMove = "player";
+            appendLog("You spoke up and calmly clarified what you contributed.");
+            showBanner("", "You held your ground.");
+            updateUI(); queueSave();
+          }
+        },
+        {
+          label: "Let it go",
+          primary: false,
+          onChoose: () => {
+            applyAssistantMgrTugShift(+6);
+            player.assistantMgrLastMove = "tim";
+            appendLog("You stayed quiet. Tim soaked up the credit.");
+            showBanner("", "Tim gained ground.");
+            updateUI(); queueSave();
+          }
+        }
+      ]
+    );
+    return true;
+  }
+
+  // 4) Final project event (late-race)
+  if (!player.assistantMgrFinalProjectEventDone && week >= 11 && week <= 13) {
+    player.assistantMgrFinalProjectEventDone = true;
+    lockAssistantMgrEventThisWeek();
+
+    openChoiceOverlay(
+      "Extra Responsibility",
+      "Your manager asks who can take on a difficult short-term project.<br><br>It’s the kind of thing they remember.",
+      [
+        {
+          label: "Volunteer (-25 Energy, -10 Hygiene)",
+          primary: true,
+          reqEnergy: 25,
+          reqHygiene: 10,
+          onChoose: () => {
+            player.energy -= 25;
+            player.hygiene -= 10;
+            applyAssistantMgrTugShift(-14);
+            player.assistantMgrLastMove = "player";
+            appendLog("You volunteered for the hard project.");
+            showBanner("", "You stepped up.");
+            updateUI(); queueSave();
+          }
+        },
+        {
+          label: "Stay quiet",
+          primary: false,
+          onChoose: () => {
+            applyAssistantMgrTugShift(+8);
+            player.assistantMgrLastMove = "tim";
+            appendLog("You stayed quiet. Tim didn’t.");
+            showBanner("", "Tim stepped up.");
+            updateUI(); queueSave();
+          }
+        }
+      ]
+    );
+    return true;
+  }
+
+  return false;
 }
 
 function canAssistantMgrPushNow() {
@@ -2543,7 +2997,7 @@ function resetAssistantMgrRace(opts = {}) {
   player.assistantMgrAppliedDay = 0;
   player.assistantMgrStartDay = 0;
   player.assistantMgrWeeksElapsed = 0;
-  player.assistantMgrWeeksTotal = 20;
+  player.assistantMgrWeeksTotal = 15;
   player.assistantMgrTugPos = 0;
   player.assistantMgrWeekPushes = 0;
   player.assistantMgrPushedToday = false;
@@ -2561,6 +3015,15 @@ function resetAssistantMgrRace(opts = {}) {
   player.assistantMgrWeekEventTarget = 0;
   player.assistantMgrLastEventId = null;
   player.assistantMgrWeekEventSeen = [];
+  // Reset promotion special events
+  player.assistantMgrEventLockWeek = -1;
+  player.assistantMgrRegisterEventDone = false;
+  player.assistantMgrRegisterStoleMoney = false;
+  player.assistantMgrRegisterRumorWeek = -1;
+  player.assistantMgrRegisterRumorShown = false;
+  player.assistantMgrCreditTheftEventDone = false;
+  player.assistantMgrFinalProjectEventDone = false;
+
 }
 
 function getAssistantMgrProgressText(progress) {
@@ -2791,7 +3254,7 @@ function assistantMgrWeeklyReview() {
   if (!isAssistantMgrRaceActive()) return;
 
   const weekNum = (player.assistantMgrWeeksElapsed || 0) + 1;
-  const total = player.assistantMgrWeeksTotal || 20;
+  const total = player.assistantMgrWeeksTotal || 15;
 
   const before = clamp(player.assistantMgrTugPos || 0, -100, 100);
   const { gain, isSurge } = getTimWeeklyGain(weekNum, before);
@@ -2847,39 +3310,25 @@ function assistantMgrWeeklyReview() {
   player.assistantMgrWeekPushes = 0;
   player.assistantMgrWorkedWedThisWeek = false;
 
-  // Resolve at the end of 20 weeks.
+  // Resolve at the end of 15 weeks.
   if (player.assistantMgrWeeksElapsed >= total) {
     const pos = clamp(player.assistantMgrTugPos || 0, -100, 100);
 
     // Slight bias toward the player if it's close.
     const playerWins = (pos < 10);
 
+    // Stop the race now, but delay the decision ceremony until the next time you return to work.
+    player.assistantMgrApplied = false;
+    player.assistantMgrDecisionPending = true;
+    player.assistantMgrDecisionOutcome = playerWins ? "win" : "lose";
+    player.assistantMgrDecisionShown = false;
+
     if (playerWins) {
-      player.isAssistantManager = true;
-      player.assistantMgrApplied = false;
-      player.assistantMgrLastWeekMessage = "They offered you the position.";
-      player.assistantMgrLastTimEvent = "";
-      showOrQueueModal(
-        "Promotion",
-        "They offered you the position.<br><br>The expectations change.<br>So does the pay.",
-        "OK",
-        () => { updateUI(); queueSave(); }
-      );
-      appendLog("<strong>They offered you the position.</strong> You’re now Assistant Manager.");
-      showBanner("success", "Promoted: Assistant Manager.");
+      player.assistantMgrLastWeekMessage = "A decision is coming Monday.";
+      appendLog("<strong>Final week complete.</strong> Management is making a decision.");
     } else {
-      player.assistantMgrCooldownDays = 14;
-      player.assistantMgrApplied = false;
-      player.assistantMgrLastWeekMessage = "They went another direction.";
-      player.assistantMgrLastTimEvent = "";
-      showOrQueueModal(
-        "Decision",
-        "They went another direction.<br><br>You still have your job.<br>Life goes on.",
-        "OK",
-        () => { updateUI(); queueSave(); }
-      );
-      appendLog("<strong>They went another direction.</strong> You can try again later.");
-      showBanner("error", "Not selected.");
+      player.assistantMgrLastWeekMessage = "A decision is coming Monday.";
+      appendLog("<strong>Final week complete.</strong> Management is making a decision.");
     }
 
     // Reset weekly flags post resolution.
@@ -2888,6 +3337,7 @@ function assistantMgrWeeklyReview() {
     player.assistantMgrCanPushTonight = false;
     player.assistantMgrPushedToday = false;
   }
+
 }
 
 
@@ -3507,8 +3957,8 @@ function renderActions() {
         // Tooltip text should reflect the current role.
         const workTip = isAM
           ? (player.hasReliableCar
-              ? "Work an assistant manager shift. Earn $60–$80. Costs: -30 Hunger, -45 Energy, -18 Hygiene. Time: 2 segments."
-              : "Work an assistant manager shift. Earn $60–$80. Costs: -30 Hunger, -45 Energy, -18 Hygiene. Takes the whole day.")
+              ? "Work an assistant manager shift. Paid weekly ($420–$480) on Saturdays after work. Costs: -30 Hunger, -45 Energy, -18 Hygiene. Time: 2 segments."
+              : "Work an assistant manager shift. Paid weekly ($420–$480) on Saturdays after work. Costs: -30 Hunger, -45 Energy, -18 Hygiene. Takes the whole day.")
           : (player.isShiftLead
               ? (player.hasReliableCar
                   ? "Work a lead shift. Earn $33–$44. Costs: -30 Hunger, -45 Energy, -19 Hygiene. Time: 2 segments."
@@ -3562,7 +4012,7 @@ function renderActions() {
     // Assistant Manager (UI shell): appears after the opportunity notice.
     if (player.assistantMgrApplied) {
       btn("Work Progress", "Assistant manager consideration", openAssistantManagerProgressPanel, false);
-    } else if (player.assistantMgrOpportunityShown && player.assistantMgrCooldownDays === 0 && !player.isAssistantManager) {
+    } else if (player.assistantMgrOpportunityShown && player.assistantMgrCooldownDays === 0 && !player.isAssistantManager && !player.assistantMgrDecisionPending) {
       btn("Apply for Assistant Manager", "Consideration for a higher role", openAssistantManagerApplyPanel, false);
     }
     {
