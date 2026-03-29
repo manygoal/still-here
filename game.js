@@ -27,6 +27,7 @@ const fitVal = document.getElementById("fitVal");
 const actionsGrid = document.getElementById("actionsGrid");
 const logEl = document.getElementById("log");
 const bannerContainer = document.getElementById("bannerContainer");
+const managerProgramPanel = document.getElementById("managerProgramPanel");
 const rentStatusEl = document.getElementById("rentStatus");
 const hungerRow = document.getElementById("hungerRow");
 const sceneBg = document.getElementById("sceneBackground");
@@ -199,49 +200,50 @@ const REC_VACATION_HOPE = 25;
 
 // --- PLAYER STATE ---
 const player = {
-  day: 1,
+  day: 29,
   segmentIndex: 0,
 
   _endOfDayLock: false,
   _sleptTonight: false,
 
   hunger: 50,
-  energy: 70,
-  hygiene: 60,
+  energy: 100,
+  hygiene: 100,
   // Hope is a hidden mood score from -5..+5. The UI shows a label (Broken..Optimistic)
   // and a bar mapped to 0..100.
   hope: 0,
   // Hope changes accumulate during the day and apply after you sleep (end of day),
   // except for major setbacks (fired / apartment lost) which set hope immediately.
   hopePending: 0,
-  money: 5000,
+  money: 500,
 
-  workEthic: 0,
-  intelligence: 0,
-  charm: 0,
-  fitness: 0,
+  workEthic: 15,
+  intelligence: 15,
+  charm: 15,
+  fitness: 15,
 
-  hasFastFoodJob: false,
+  hasFastFoodJob: true,
   jobAppliedToday: false,
-  shiftsWorked: 0,
+  shiftsWorked: 12,
   isShiftLead: false,
   promoCooldownDays: 0,
   jobCooldownDays: 0,
 
   motelNights: 0,
-  lastSleep: null,
+  lastSleep: "apartment",
 
   snackAvailable: true,
   convoAvailable: true,
 
   // Apartment tier
-  hasApartment: false,
-  daysUntilRent: null,
+  hasApartment: true,
+  daysUntilRent: 7,
 
   // Gear
   hasComputer: false,
   // Vehicles
-  hasReliableCar: false,
+  hasReliableCar: true,
+
 
   // Assistant Manager (promotion race) — UI shell only (full logic later)
   assistantMgrOpportunityShown: false,
@@ -283,18 +285,31 @@ const player = {
   assistantMgrFinalWeekendNoticeShown: false,
   assistantMgrDecisionPending: false,
   assistantMgrDecisionOutcome: "",
-  assistantMgrLastPaidWorkWeekSerial: -1, // "win" | "lose"
+  assistantMgrLastPaidWorkWeekSerial: 3, // last paid week serial
   assistantMgrDecisionShown: false,
 
   assistantMgrTimChatterCooldown: 0,
-  isAssistantManager: false,
+  isAssistantManager: true,
+  assistantMgrPromotionDay: 1,
+  isManager: false,
+  managerProgramOffered: false,
+  managerProgramActive: false,
+  managerProgramStartDay: 0,
+  managerProgramCurrentCycle: 0,
+  managerProgramCompletedTotal: 0,
+  managerProgramCompletedCycles: 0,
+  managerProgramShownCycle: 0,
+  managerProgramLastResolvedCycle: 0,
+  managerProgramAssignments: [],
+  managerProgramCompletedIds: [],
+  managerProgramFailedIds: [],
   lastContractSignature: "",
-  leadShiftsWorked: 0,
-  apartmentDaysOwned: 0,
+  leadShiftsWorked: 12,
+  apartmentDaysOwned: 10,
 
   // Weekly work tracking
   weekDayIndex: 0,          // 0-6, Monday-ish
-  workWeekSerial: 0,       // increments each Monday for weekly pay / tracking
+  workWeekSerial: 4,       // increments each Monday for weekly pay / tracking
   missedWorkThisWeek: 0,
   workedThisMorning: false,
   // Some actions can consume your morning without counting as a no-show.
@@ -1134,6 +1149,8 @@ function openAssistantMgrDecisionCeremony(onAfter) {
       (sigDataUrl) => {
         // Apply promotion now.
         player.isAssistantManager = true;
+        player.assistantMgrPromotionDay = player.day;
+        player.isShiftLead = true;
         player.assistantMgrDecisionPending = false;
         player.assistantMgrDecisionOutcome = "";
         player.assistantMgrLastWeekMessage = "They offered you the position.";
@@ -1392,6 +1409,180 @@ function checkForBurnout() {
 }
 
 // --- UI ---
+
+const MANAGER_ASSIGNMENTS = [
+  { id:"shift60", title:"Strong Start", desc:"Start 12 work shifts with Energy ≥ 60.", group:"energy", difficulty:"hard", mode:"progress", progressLabel:(a)=>`${a.count||0} / 12` },
+  { id:"shift85x5", title:"High-Energy Shifts", desc:"Work 5 shifts with Energy ≥ 85.", group:"energy", difficulty:"medium", mode:"progress", progressLabel:(a)=>`${a.count||0} / 5` },
+  { id:"charm5", title:"Communication Training", desc:"Increase Charm by +5.", group:"growth", difficulty:"hard", mode:"progress", progressLabel:(a)=>`+${Math.max(0, player.charm - (a.startCharm||player.charm))} / +5` },
+  { id:"we5", title:"Professional Growth", desc:"Increase Work Ethic by +5.", group:"growth", difficulty:"hard", mode:"progress", progressLabel:(a)=>`+${Math.max(0, player.workEthic - (a.startWE||player.workEthic))} / +5` },
+  { id:"int10", title:"Study Push", desc:"Increase Intelligence by +10.", group:"growth", difficulty:"medium", mode:"progress", progressLabel:(a)=>`+${Math.max(0, player.intelligence - (a.startINT||player.intelligence))} / +10` },
+  { id:"recreation5", title:"Recovery Time", desc:"Use Recreation 5 times.", group:"lifestyle", difficulty:"easy", mode:"progress", progressLabel:(a)=>`${a.count||0} / 5` },
+  { id:"spend400", title:"Invest in Yourself", desc:"Spend $400 on recreation or personal development.", group:"lifestyle", difficulty:"medium", mode:"progress", progressLabel:(a)=>`$${a.spent||0} / $400` },
+  { id:"work12", title:"Work Every Shift", desc:"Work 12 shifts during this cycle.", group:"reliability", difficulty:"medium", mode:"progress", progressLabel:(a)=>`${a.count||0} / 12` },
+  { id:"sidegig3", title:"Extra Initiative", desc:"Use Side Gig 3 times.", group:"initiative", difficulty:"easy", mode:"progress", progressLabel:(a)=>`${a.count||0} / 3` },
+];
+
+function getAssignmentDef(id){ return MANAGER_ASSIGNMENTS.find(q=>q.id===id); }
+function canOfferManagerProgram(){
+  if (!player.isAssistantManager || player.isManager || player.managerProgramActive) return false;
+  if (!player.hasReliableCar) return false;
+  if (!player.assistantMgrPromotionDay) return false;
+  return (player.day - player.assistantMgrPromotionDay) >= 28;
+}
+function getManagerCycleIndexByDay(day){
+  if (!player.managerProgramStartDay) return 0;
+  return Math.floor((day - player.managerProgramStartDay)/14)+1;
+}
+function randomFrom(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+function pickManagerAssignmentsForCycle(cycle){
+  const all=MANAGER_ASSIGNMENTS;
+  let pool1=[], pool2=[];
+  if (cycle===1){
+    pool1=all.filter(q=>q.difficulty==='easy');
+    pool2=all.filter(q=>q.difficulty==='medium');
+  } else if (cycle===2){
+    pool1=all.filter(q=>q.difficulty==='medium');
+    pool2=all.filter(q=>q.difficulty==='medium' || q.difficulty==='hard');
+  } else {
+    pool1=all.filter(q=>q.difficulty==='hard');
+    pool2=all.filter(q=>q.difficulty==='medium' || q.difficulty==='hard');
+  }
+  const usedIds = new Set([...(player.managerProgramCompletedIds||[]), ...(player.managerProgramFailedIds||[])]);
+  let a1Pool = pool1.filter(q=>!usedIds.has(q.id)); if(!a1Pool.length) a1Pool=pool1;
+  const q1 = randomFrom(a1Pool);
+  let a2Pool = pool2.filter(q=>q.group!==q1.group && !usedIds.has(q.id));
+  if (q1.id==='charm5') a2Pool = a2Pool.filter(q=>q.id!=='we5');
+  if (q1.id==='we5') a2Pool = a2Pool.filter(q=>q.id!=='charm5');
+  if(!a2Pool.length) a2Pool = pool2.filter(q=>q.group!==q1.group && q.id!==q1.id);
+  if (q1.id==='charm5') a2Pool = a2Pool.filter(q=>q.id!=='we5');
+  if (q1.id==='we5') a2Pool = a2Pool.filter(q=>q.id!=='charm5');
+  if(!a2Pool.length) a2Pool = pool2.filter(q=>q.id!==q1.id);
+  const q2 = randomFrom(a2Pool);
+  return [makeManagerAssignmentState(q1.id), makeManagerAssignmentState(q2.id)];
+}
+function makeManagerAssignmentState(id){
+  const a={ id, complete:false, failed:false, count:0, spent:0, missed:0, status:'Active', startMoney:player.money, startCharm:player.charm, startWE:player.workEthic, startINT:player.intelligence };
+  return a;
+}
+function startManagerProgram(){
+  player.managerProgramActive = true;
+  player.managerProgramStartDay = player.day;
+  player.managerProgramCurrentCycle = 1;
+  player.managerProgramCompletedTotal = 0;
+  player.managerProgramShownCycle = 0;
+  player.managerProgramLastResolvedCycle = 0;
+  player.managerProgramAssignments = pickManagerAssignmentsForCycle(1);
+  player.managerProgramCompletedIds = [];
+  player.managerProgramFailedIds = [];
+  maybeShowManagerCyclePopup();
+}
+function maybeShowManagerCyclePopup(){
+  if (!player.managerProgramActive) return;
+  const cycle = player.managerProgramCurrentCycle || 1;
+  if (player.managerProgramShownCycle >= cycle) return;
+  player.managerProgramShownCycle = cycle;
+  const items = (player.managerProgramAssignments||[]).map(a=>`• ${getAssignmentDef(a.id).desc}`).join('<br>');
+  showOrQueueModal('Manager Development Program', `Cycle ${cycle} begins.<br><br>${items}<br><br><strong>Mistakes cannot be undone during this cycle.</strong>`, 'OK', ()=>{ updateUI(); queueSave(); });
+}
+function resolveManagerCycle(){
+  const assigns = player.managerProgramAssignments||[];
+  let completed=0;
+  for (const a of assigns){
+    if (!a.failed && isManagerAssignmentComplete(a)) { a.complete=true; }
+    if (a.complete) completed += 1;
+    if (a.complete) player.managerProgramCompletedIds.push(a.id); else player.managerProgramFailedIds.push(a.id);
+  }
+  player.managerProgramCompletedTotal += completed;
+  player.managerProgramLastResolvedCycle = player.managerProgramCurrentCycle;
+  const total = player.managerProgramCompletedTotal;
+  showOrQueueModal('Cycle Complete', `Assignments Completed: ${completed} / 2<br>Total Completed: ${total} / 6`, 'OK', ()=>{ updateUI(); queueSave(); });
+}
+function isManagerAssignmentComplete(a){
+  if (a.failed) return false;
+  switch(a.id){
+    case 'shift60': return (a.count||0) >= 12;
+    case 'shift85x5': return (a.count||0) >= 5;
+    case 'charm5': return (player.charm - a.startCharm) >= 5;
+    case 'we5': return (player.workEthic - a.startWE) >= 5;
+    case 'int10': return (player.intelligence - a.startINT) >= 10;
+    case 'recreation5': return (a.count||0) >= 5;
+    case 'spend400': return (a.spent||0) >= 400;
+    case 'sidegig3': return (a.count||0) >= 3;
+    case 'work12': return (a.count||0) >= 12;
+    default: return !!a.complete;
+  }
+}
+function updateManagerAssignmentsForAction(action, data={}){
+  if (!player.managerProgramActive) return;
+  for (const a of (player.managerProgramAssignments||[])) {
+    if (a.complete || a.failed) continue;
+    if (a.id==='charm5' && (player.charm - a.startCharm) >= 5) a.complete = true;
+    if (a.id==='we5' && (player.workEthic - a.startWE) >= 5) a.complete = true;
+    if (a.id==='int10' && (player.intelligence - a.startINT) >= 10) a.complete = true;
+    if (a.id==='recreation5' && action==='recreation') { a.count=(a.count||0)+1; if (a.count>=5) a.complete=true; }
+    if (a.id==='spend400' && (action==='recreationSpend' || action==='personalSpend')) { a.spent=(a.spent||0)+(data.amount||0); if (a.spent>=400) a.complete=true; }
+    if (a.id==='sidegig3' && action==='sidegig') { a.count=(a.count||0)+1; if (a.count>=3) a.complete=true; }
+  }
+}
+function handleManagerShiftStart(energyAtStart){
+  if (!player.managerProgramActive) return;
+  for (const a of (player.managerProgramAssignments||[])) {
+    if (a.complete || a.failed) continue;
+    if (a.id==='shift60' && energyAtStart >= 60) { a.count=(a.count||0)+1; if (a.count>=12) a.complete=true; }
+    if (a.id==='shift85x5' && energyAtStart >= 85) { a.count=(a.count||0)+1; if (a.count>=5) a.complete=true; }
+    if (a.id==='work12') { a.count=(a.count||0)+1; if (a.count>=12) a.complete=true; }
+  }
+}
+function handleManagerMissedShift(){
+  if (!player.managerProgramActive) return;
+}
+function updateManagerProgramState(){
+  if (!player.managerProgramActive) return;
+  const cycle = getManagerCycleIndexByDay(player.day);
+  if (cycle !== player.managerProgramCurrentCycle) {
+    if (player.managerProgramLastResolvedCycle < player.managerProgramCurrentCycle) resolveManagerCycle();
+    if (cycle > 3) {
+      const passed = (player.managerProgramCompletedTotal||0) >= 4;
+      player.managerProgramActive = false;
+      player.managerProgramAssignments = [];
+      if (passed) {
+        player.isManager = true;
+        player.money += 1000;
+        showOrQueueModal('Manager Review Complete', `You completed ${player.managerProgramCompletedTotal} of 6 assignments.<br><br>They offered you the Manager position.<br><br>You received a $1000 promotion bonus.`, 'OK', ()=>{ updateUI(); queueSave(); });
+      } else {
+        showOrQueueModal('Manager Review Complete', `You completed ${player.managerProgramCompletedTotal} of 6 assignments.<br><br>You were not selected for Manager this time.`, 'OK', ()=>{ updateUI(); queueSave(); });
+      }
+      return;
+    }
+    player.managerProgramCurrentCycle = cycle;
+    player.managerProgramAssignments = pickManagerAssignmentsForCycle(cycle);
+    maybeShowManagerCyclePopup();
+  }
+}
+function renderManagerProgramPanel(){
+  if (!managerProgramPanel) return;
+  if (!player.managerProgramActive){ managerProgramPanel.innerHTML=''; managerProgramPanel.classList.add('hidden'); return; }
+  const cycle = player.managerProgramCurrentCycle || 1;
+  const total = player.managerProgramCompletedTotal || 0;
+  const cards = (player.managerProgramAssignments||[]).map(a=>{
+    const def = getAssignmentDef(a.id);
+    let meta='Status: Active'; let cls='';
+    if (a.failed) { meta='Status: Failed ❌'; cls=' failed'; }
+    else if (a.complete || isManagerAssignmentComplete(a)) { meta='Completed ✔'; cls=' complete'; a.complete=true; }
+    else if (a.id==='miss1') { meta = a.failed ? 'Status: Failed ❌' : `Status: ${Math.max(0,1-(a.missed||0))} miss remaining`; }
+    else if (def.mode==='progress') { meta='Progress: ' + def.progressLabel(a); }
+    return `<div class="manager-card${cls}"><div class="manager-card-title">${def.title}</div><div class="manager-card-desc">${def.desc}</div><div class="manager-card-meta">${meta}</div></div>`;
+  }).join('');
+  managerProgramPanel.innerHTML = `<div class="manager-program-header"><div><div class="manager-program-title">Manager Development Program</div><div class="manager-program-sub">Cycle ${cycle} / 3</div></div><div class="manager-program-sub">Completed: ${total} / 6</div></div><div class="manager-assignments">${cards}</div>`;
+  managerProgramPanel.classList.remove('hidden');
+}
+function openManagerApplyPanel(){
+  openOverlay('manager_apply', ()=>`<div class="sidegig-panel"><div class="panel-header"><div class="panel-title">Manager Development Program</div><div class="panel-sub">You now have the chance to go for Manager.<br><br>The program lasts <strong>6 weeks</strong>, split into three 2-week cycles.<br>Each cycle gives you two assignments. Complete <strong>4 of 6</strong> to earn the role.</div></div><div class="panel-actions"><button class="panel-button primary" id="managerApplyBtn" type="button">Apply</button><button class="panel-button" id="managerApplyBackBtn" type="button">Back</button></div></div>`);
+  const a=document.getElementById('managerApplyBtn'); const b=document.getElementById('managerApplyBackBtn');
+  if (a) a.onclick=()=>{ closeOverlay(); startManagerProgram(); updateUI(); queueSave(); };
+  if (b) b.onclick=()=>{ closeOverlay(); updateUI(); };
+}
+
 function updateUI() {
   maybeShowAssistantMgrFinalWeekendNotice();
 
@@ -1411,6 +1602,8 @@ function updateUI() {
   let status = "On the street";
   if (player.hasFastFoodJob && !player.isShiftLead) status = "Fast Food Helper";
   if (player.isShiftLead) status = "Shift Lead";
+  if (player.isAssistantManager) status = "Assistant Manager";
+  if (player.isManager) status = "Manager";
   if (player.hasApartment) status += " • Apartment";
 
   statusDisplay.textContent = status;
@@ -1471,6 +1664,8 @@ function updateUI() {
   }
 
   // If an overlay is open, don't re-render actions here
+  updateManagerProgramState();
+  renderManagerProgramPanel();
   if (!currentOverlayMode) {
     renderActions();
   }
@@ -1634,7 +1829,7 @@ function recordMorningPassIfNoWork(prevSegmentIndex) {
 
   if (!player.workedThisMorning && !excused) {
     player.missedWorkThisWeek += 1;
-
+    handleManagerMissedShift();
 
     if (!player.workWarningExplained) {
       player.workWarningExplained = true;
@@ -1729,6 +1924,8 @@ function handleNewDay() {
   player.hygieneWarnedToday = false;
   player.jobAppliedToday = false;
   appendLog("<strong>Day " + player.day + "</strong> begins. Morning.");
+  updateManagerProgramState();
+  maybeShowManagerCyclePopup();
 
   // Apartment day counter
   if (player.hasApartment) player.apartmentDaysOwned += 1;
@@ -2100,6 +2297,7 @@ return;
 }
 
 function doWorkShift() {
+  const energyAtStart = player.energy;
   // Hygiene warning only triggers if you show up to work with low hygiene.
   applyHygieneWarningIfNeeded();
   if (!player.hasFastFoodJob) return;
@@ -2124,7 +2322,19 @@ function doWorkShift() {
   
   let wage = 0;
   // Assistant Manager is paid weekly on Saturdays after work.
-  if (player.isAssistantManager) {
+  if (player.isManager) {
+    const isSaturday = (player.weekDayIndex === 5);
+    const wk = (player.workWeekSerial || 0);
+    if (isSaturday && player.assistantMgrLastPaidWorkWeekSerial !== wk) {
+      wage = 700;
+      player.assistantMgrLastPaidWorkWeekSerial = wk;
+      player.money += wage;
+      appendLog(`<strong>Payday.</strong> You received $${wage} (weekly manager pay).`);
+      showBanner("success", `Weekly pay received: $${wage}`);
+    } else {
+      appendLog("You worked your Manager shift. Payday is Saturday.");
+    }
+  } else if (player.isAssistantManager) {
     const isSaturday = (player.weekDayIndex === 5);
     const wk = (player.workWeekSerial || 0);
     if (isSaturday && player.assistantMgrLastPaidWorkWeekSerial !== wk) {
@@ -2148,7 +2358,10 @@ function doWorkShift() {
   adjustHunger(-30);
   player.energy -= 45;
   // Working is grimy. (Increased hygiene impact by +4)
-  if (player.isAssistantManager) {
+  if (player.isManager) {
+    player.energy += 10; // manager perk: shifts effectively cost 10 less energy
+    player.hygiene -= 16;
+  } else if (player.isAssistantManager) {
     player.hygiene -= 18;
   } else {
     player.hygiene -= player.isShiftLead ? 19 : 22;
@@ -2158,6 +2371,7 @@ function doWorkShift() {
   player.shiftsWorked += 1;
   if (player.isShiftLead) player.leadShiftsWorked += 1;
   player.workedThisMorning = true;
+  handleManagerShiftStart(energyAtStart);
 
   // Assistant manager race: track Wednesday attendance.
   if (isAssistantMgrRaceActive() && player.weekDayIndex === 2) {
@@ -3486,6 +3700,7 @@ function doCookingAction() {
   const hopeGain = player.workEthic >= 4 ? 2 : (player.workEthic >= 2 ? 1 : 0);
   if (hopeGain !== 0) addHope(hopeGain);
 
+  updateManagerAssignmentsForAction("sidegig");
   appendLog(`You cook and sell meals from your tiny kitchen. You earn <strong>$${earnings}</strong> and feel your effort paying off.`);
   showBanner("success", `Side gig earned $${earnings}. Net +$${earnings - COOKING_SUPPLY_COST}.`);
 
@@ -3614,6 +3829,8 @@ function doFishing() {
     return;
   }
   player.money -= REC_FISH_COST;
+  updateManagerAssignmentsForAction("recreation");
+  updateManagerAssignmentsForAction("recreationSpend", { amount: REC_FISH_COST });
   player.energy = clamp(player.energy + REC_FISH_ENERGY, 0, 100);
   addHope(+1);
 
@@ -3631,6 +3848,8 @@ function doMovies() {
     return;
   }
   player.money -= REC_MOVIE_COST;
+  updateManagerAssignmentsForAction("recreation");
+  updateManagerAssignmentsForAction("recreationSpend", { amount: REC_MOVIE_COST });
   player.energy = clamp(player.energy + REC_MOVIE_ENERGY, 0, 100);
   addHope(+2);
 
@@ -3648,6 +3867,8 @@ function doVacation() {
     return;
   }
   player.money -= REC_VACATION_COST;
+  updateManagerAssignmentsForAction("recreation");
+  updateManagerAssignmentsForAction("recreationSpend", { amount: REC_VACATION_COST });
   player.energy = 100;
   addHope(+3);
 
@@ -3950,12 +4171,17 @@ function renderActions() {
       // Weekday: work is only available in the Morning, but we keep a disabled placeholder
       // later in the day so buttons don't jump around.
       if (segName === "Morning") {
-        const isAM = !!player.isAssistantManager;
-        const workLabel = isAM ? "Work Assistant Manager Shift" : (player.isShiftLead ? "Work Lead Shift" : "Work Fast Food Shift");
+        const isMgr = !!player.isManager;
+        const isAM = !!player.isAssistantManager && !isMgr;
+        const workLabel = isMgr ? "Work Manager Shift" : (isAM ? "Work Assistant Manager Shift" : (player.isShiftLead ? "Work Lead Shift" : "Work Fast Food Shift"));
         const workSub = player.hasReliableCar ? "Takes 2 segments, good pay" : "Takes all day, good pay";
 
         // Tooltip text should reflect the current role.
-        const workTip = isAM
+        const workTip = isMgr
+          ? (player.hasReliableCar
+              ? "Work a manager shift. Paid weekly ($700) on Saturdays after work. Costs: -30 Hunger, -35 Energy, -16 Hygiene. Time: 2 segments."
+              : "Work a manager shift. Paid weekly ($700) on Saturdays after work. Costs: -30 Hunger, -35 Energy, -16 Hygiene. Takes the whole day.")
+          : isAM
           ? (player.hasReliableCar
               ? "Work an assistant manager shift. Paid weekly ($420–$480) on Saturdays after work. Costs: -30 Hunger, -45 Energy, -18 Hygiene. Time: 2 segments."
               : "Work an assistant manager shift. Paid weekly ($420–$480) on Saturdays after work. Costs: -30 Hunger, -45 Energy, -18 Hygiene. Takes the whole day.")
@@ -4003,7 +4229,7 @@ function renderActions() {
     // Apartment daytime: keep some tools, but not street-only ones
     btn("Library", "Study, +Int & Hope", doLibrary, false, "Gain: +1 Intelligence, +1 Hope. Costs: -6 Hunger, -10 Energy, -3 Hygiene. Time: 1 segment.");
     btn("Gym", "Exercise, +Fitness", doGym, false, "Gain: +1 Fitness. Costs: -12 Hunger, -20 Energy, -12 Hygiene. Time: 1 segment.");
-    btn("Rest", "Recover a little energy at home", doRest, false);
+    btn("Rest", "Disabled for this test", () => {}, false, "Rest is disabled in this test build.", "Rest is disabled in this test build.");
     btn("Wash Up", "Restore hygiene (important for work)", doWash, false);
     btn("Recreation...", "Fishing, Movies, Vacation", openRecreationPanel, false);
     btn("Vehicles", "Buy a car (apartment tier)", openVehiclesPanel, false, "Purchase vehicles. A reliable car makes your work shift take 2 segments instead of all day.");
@@ -4014,6 +4240,9 @@ function renderActions() {
       btn("Work Progress", "Assistant manager consideration", openAssistantManagerProgressPanel, false);
     } else if (player.assistantMgrOpportunityShown && player.assistantMgrCooldownDays === 0 && !player.isAssistantManager && !player.assistantMgrDecisionPending) {
       btn("Apply for Assistant Manager", "Consideration for a higher role", openAssistantManagerApplyPanel, false);
+    }
+    if (canOfferManagerProgram() && !player.managerProgramActive) {
+      btn("Apply for Manager", "Enter the development program", openManagerApplyPanel, false, "Requires a reliable car and time served as Assistant Manager. Program lasts 6 weeks.");
     }
     {
     const segsNeeded = getCookingTimeCostSegments();

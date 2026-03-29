@@ -418,7 +418,7 @@ body {
 .action-btn {
   border: none;
   border-radius: 14px;
-  padding: 8px 6px;
+  padding: 8px 44px 8px 8px;
   font-size: 0.72rem;
   line-height: 1.15;
   text-align: left;
@@ -436,10 +436,15 @@ body {
 .action-btn .label {
   font-weight: 650;
   font-size: 0.92rem;
+  padding-right: 8px;
+  white-space: normal;
+  word-break: break-word;
 }
 .action-btn .sub {
   font-size: 0.63rem;
   color: var(--text-muted);
+  padding-right: 8px;
+  white-space: normal;
 }
 
 .action-btn.primary {
@@ -1283,3 +1288,17 @@ button:focus-visible {
 .panel-button.disabled:hover{
   transform: none;
 }
+
+
+.manager-program-panel{margin:10px 16px 0;border:1px solid rgba(255,255,255,.12);background:rgba(9,12,18,.72);border-radius:14px;padding:12px;box-shadow:0 8px 22px rgba(0,0,0,.22)}
+.manager-program-panel.hidden{display:none!important}
+.manager-program-header{display:flex;justify-content:space-between;gap:10px;align-items:flex-end;margin-bottom:10px}
+.manager-program-title{font-weight:700;font-size:15px}
+.manager-program-sub{font-size:12px;opacity:.82}
+.manager-assignments{display:grid;gap:10px}
+.manager-card{border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:10px;background:rgba(255,255,255,.03)}
+.manager-card-title{font-weight:700;font-size:14px;margin-bottom:4px}
+.manager-card-desc{font-size:12px;opacity:.86;line-height:1.35;margin-bottom:6px}
+.manager-card-meta{font-size:12px;font-weight:600}
+.manager-card.complete{opacity:.9;box-shadow:0 0 0 1px rgba(134,239,172,.25) inset}
+.manager-card.failed{opacity:.78;box-shadow:0 0 0 1px rgba(248,113,113,.25) inset}
