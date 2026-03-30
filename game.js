@@ -364,6 +364,7 @@ function excuseMorningIfNeeded() {
 
 // Overlay state
 let currentOverlayMode = null; // 'lottery', 'sidegig', 'recreation'
+let managerProgramExpanded = false; // compact by default on mobile
 
 // --- SAVE / CONTINUE (v1) ---
 // Auto-saves after most state changes so mobile players can leave and come back.
@@ -1564,17 +1565,36 @@ function renderManagerProgramPanel(){
   if (!player.managerProgramActive){ managerProgramPanel.innerHTML=''; managerProgramPanel.classList.add('hidden'); return; }
   const cycle = player.managerProgramCurrentCycle || 1;
   const total = player.managerProgramCompletedTotal || 0;
-  const cards = (player.managerProgramAssignments||[]).map(a=>{
+  const rows = (player.managerProgramAssignments||[]).map(a=>{
     const def = getAssignmentDef(a.id);
-    let meta='Status: Active'; let cls='';
-    if (a.failed) { meta='Status: Failed ❌'; cls=' failed'; }
+    let meta='Active'; let cls='';
+    if (a.failed) { meta='Failed ❌'; cls=' failed'; }
     else if (a.complete || isManagerAssignmentComplete(a)) { meta='Completed ✔'; cls=' complete'; a.complete=true; }
-    else if (a.id==='miss1') { meta = a.failed ? 'Status: Failed ❌' : `Status: ${Math.max(0,1-(a.missed||0))} miss remaining`; }
-    else if (def.mode==='progress') { meta='Progress: ' + def.progressLabel(a); }
-    return `<div class="manager-card${cls}"><div class="manager-card-title">${def.title}</div><div class="manager-card-desc">${def.desc}</div><div class="manager-card-meta">${meta}</div></div>`;
+    else if (def.mode==='progress') { meta = def.progressLabel(a); }
+    const goal = def.desc;
+    return `<div class="manager-row${cls}"><div class="manager-row-goal">${goal}</div><div class="manager-row-meta">${meta}</div></div>`;
   }).join('');
-  managerProgramPanel.innerHTML = `<div class="manager-program-header"><div><div class="manager-program-title">Manager Development Program</div><div class="manager-program-sub">Cycle ${cycle} / 3</div></div><div class="manager-program-sub">Completed: ${total} / 6</div></div><div class="manager-assignments">${cards}</div>`;
+  managerProgramPanel.innerHTML = managerProgramExpanded
+    ? `
+    <button class="manager-program-header manager-program-toggle" id="managerProgramToggle" type="button" aria-expanded="true">
+      <div>
+        <div class="manager-program-title">Manager Development Program</div>
+        <div class="manager-program-sub">Cycle ${cycle} / 3</div>
+      </div>
+      <div class="manager-program-right">
+        <div class="manager-program-sub">Completed: ${total} / 6</div>
+        <div class="manager-program-caret">Hide</div>
+      </div>
+    </button>
+    <div class="manager-rows">${rows}</div>`
+    : `
+    <div class="manager-program-mini-top">
+      <button class="manager-program-mini-toggle" id="managerProgramToggle" type="button" aria-expanded="false">Show</button>
+    </div>
+    <div class="manager-rows compact">${rows}</div>`;
   managerProgramPanel.classList.remove('hidden');
+  const t = document.getElementById('managerProgramToggle');
+  if (t) t.onclick = () => { managerProgramExpanded = !managerProgramExpanded; renderManagerProgramPanel(); };
 }
 function openManagerApplyPanel(){
   openOverlay('manager_apply', ()=>`<div class="sidegig-panel"><div class="panel-header"><div class="panel-title">Manager Development Program</div><div class="panel-sub">You now have the chance to go for Manager.<br><br>The program lasts <strong>6 weeks</strong>, split into three 2-week cycles.<br>Each cycle gives you two assignments. Complete <strong>4 of 6</strong> to earn the role.</div></div><div class="panel-actions"><button class="panel-button primary" id="managerApplyBtn" type="button">Apply</button><button class="panel-button" id="managerApplyBackBtn" type="button">Back</button></div></div>`);
