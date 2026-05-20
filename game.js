@@ -179,7 +179,9 @@ const END_CHAPTER_BODY = [
 // Economy constants
 const APARTMENT_RENT = 120;
 const APARTMENT_DEPOSIT = 240;
+const BEATER_CAR_COST = 900;
 const RELIABLE_CAR_COST = 1500;
+const NEW_CAR_COST = 3000;
 const RENT_INTERVAL_DAYS = 7;
 
 // Side gig supplies
@@ -200,50 +202,50 @@ const REC_VACATION_HOPE = 25;
 
 // --- PLAYER STATE ---
 const player = {
-  day: 29,
+  day: 1,
   segmentIndex: 0,
 
   _endOfDayLock: false,
   _sleptTonight: false,
 
   hunger: 50,
-  energy: 100,
-  hygiene: 100,
+  energy: 70,
+  hygiene: 60,
   // Hope is a hidden mood score from -5..+5. The UI shows a label (Broken..Optimistic)
   // and a bar mapped to 0..100.
   hope: 0,
   // Hope changes accumulate during the day and apply after you sleep (end of day),
   // except for major setbacks (fired / apartment lost) which set hope immediately.
   hopePending: 0,
-  money: 500,
+  money: 0,
 
-  workEthic: 15,
-  intelligence: 15,
-  charm: 15,
-  fitness: 15,
+  workEthic: 0,
+  intelligence: 0,
+  charm: 0,
+  fitness: 0,
 
-  hasFastFoodJob: true,
+  hasFastFoodJob: false,
   jobAppliedToday: false,
-  shiftsWorked: 12,
+  shiftsWorked: 0,
   isShiftLead: false,
   promoCooldownDays: 0,
   jobCooldownDays: 0,
 
   motelNights: 0,
-  lastSleep: "apartment",
+  lastSleep: null,
 
   snackAvailable: true,
   convoAvailable: true,
 
   // Apartment tier
-  hasApartment: true,
-  daysUntilRent: 7,
+  hasApartment: false,
+  daysUntilRent: null,
 
   // Gear
   hasComputer: false,
   // Vehicles
-  hasReliableCar: true,
-
+  hasReliableCar: false,
+  car: null,
 
   // Assistant Manager (promotion race) — UI shell only (full logic later)
   assistantMgrOpportunityShown: false,
@@ -262,35 +264,35 @@ const player = {
   assistantMgrLastEventId: null,
   assistantMgrWeekEventSeen: [],
 
-  // Assistant Manager (tug-of-war) — Step 2: data + tick skeleton (not wired yet)
+  // Assistant Manager (tug-of-war)
   assistantMgrWeeksTotal: 15,
-  assistantMgrTugPos: 0,              // -100 (You) .. +100 (Tim)
-  assistantMgrWeekPushes: 0,          // resets weekly
-  assistantMgrPushWeekIndex: -1,   // promo-week index to enforce 2 pushes/week
-  assistantMgrPushedToday: false,     // resets daily
-  assistantMgrCanPushTonight: false,  // set true after a worked shift
+  assistantMgrTugPos: 0,
+  assistantMgrWeekPushes: 0,
+  assistantMgrPushWeekIndex: -1,
+  assistantMgrPushedToday: false,
+  assistantMgrCanPushTonight: false,
   assistantMgrLastTimEvent: "",
-  assistantMgrLastMove: "", // 'player' | 'tim' for bar
+  assistantMgrLastMove: "",
 
-  // Promotion race special events (rare, during the 15-week race)
-  assistantMgrEventLockWeek: -1,        // prevents multiple special events in same promo-week
+  // Promotion race special events
+  assistantMgrEventLockWeek: -1,
   assistantMgrRegisterEventDone: false,
   assistantMgrRegisterStoleMoney: false,
-  assistantMgrRegisterRumorWeek: -1,    // promo-week number (1-based) when rumor triggers
+  assistantMgrRegisterRumorWeek: -1,
   assistantMgrRegisterRumorShown: false,
   assistantMgrCreditTheftEventDone: false,
   assistantMgrFinalProjectEventDone: false,
 
-  // Promotion decision ceremony (week 15 weekend -> Monday)
+  // Promotion decision ceremony
   assistantMgrFinalWeekendNoticeShown: false,
   assistantMgrDecisionPending: false,
   assistantMgrDecisionOutcome: "",
-  assistantMgrLastPaidWorkWeekSerial: 3, // last paid week serial
+  assistantMgrLastPaidWorkWeekSerial: -1,
   assistantMgrDecisionShown: false,
 
   assistantMgrTimChatterCooldown: 0,
-  isAssistantManager: true,
-  assistantMgrPromotionDay: 1,
+  isAssistantManager: false,
+  assistantMgrPromotionDay: 0,
   isManager: false,
   managerProgramOffered: false,
   managerProgramActive: false,
@@ -304,15 +306,16 @@ const player = {
   managerProgramCompletedIds: [],
   managerProgramFailedIds: [],
   lastContractSignature: "",
-  leadShiftsWorked: 12,
-  apartmentDaysOwned: 10,
+  lastMortgageSignature: "",
+  chapter2Complete: false,
+  leadShiftsWorked: 0,
+  apartmentDaysOwned: 0,
 
   // Weekly work tracking
-  weekDayIndex: 0,          // 0-6, Monday-ish
-  workWeekSerial: 4,       // increments each Monday for weekly pay / tracking
+  weekDayIndex: 0,
+  workWeekSerial: 0,
   missedWorkThisWeek: 0,
   workedThisMorning: false,
-  // Some actions can consume your morning without counting as a no-show.
   morningExcused: false,
 
   // Burnout (apartment tier only)
@@ -325,6 +328,7 @@ const player = {
   eliMentions: 0,
   eliIntroduced: false,
   eliLastEventDay: 0,
+
   // Tim (coworker beats)
   timMentions: 0,
   timIntroduced: false,
@@ -333,6 +337,7 @@ const player = {
   workWarningExplained: false,
   eliShelterFailBeatShown: false,
   pendingModal: null,
+
   // Reflections
   reflectionLastShownDay: 0,
   hiredDay: 0,
@@ -1249,6 +1254,7 @@ function softRestartRun() {
 }
 
 function returnToTitleScreen() {
+  closeOverlay();
   // Leave the game in a clean state on the title screen.
   clearSave();
   gameOverShown = false;
@@ -1418,7 +1424,7 @@ const MANAGER_ASSIGNMENTS = [
   { id:"we5", title:"Professional Growth", desc:"Increase Work Ethic by +5.", group:"growth", difficulty:"hard", mode:"progress", progressLabel:(a)=>`+${Math.max(0, player.workEthic - (a.startWE||player.workEthic))} / +5` },
   { id:"int10", title:"Study Push", desc:"Increase Intelligence by +10.", group:"growth", difficulty:"medium", mode:"progress", progressLabel:(a)=>`+${Math.max(0, player.intelligence - (a.startINT||player.intelligence))} / +10` },
   { id:"recreation5", title:"Recovery Time", desc:"Use Recreation 5 times.", group:"lifestyle", difficulty:"easy", mode:"progress", progressLabel:(a)=>`${a.count||0} / 5` },
-  { id:"spend400", title:"Invest in Yourself", desc:"Spend $400 on recreation or personal development.", group:"lifestyle", difficulty:"medium", mode:"progress", progressLabel:(a)=>`$${a.spent||0} / $400` },
+  { id:"spend400", title:"Recreation Spending", desc:"Spend $400 on recreation.", group:"lifestyle", difficulty:"medium", mode:"progress", progressLabel:(a)=>`$${a.spent||0} / $400` },
   { id:"work12", title:"Work Every Shift", desc:"Work 12 shifts during this cycle.", group:"reliability", difficulty:"medium", mode:"progress", progressLabel:(a)=>`${a.count||0} / 12` },
   { id:"sidegig3", title:"Extra Initiative", desc:"Use Side Gig 3 times.", group:"initiative", difficulty:"easy", mode:"progress", progressLabel:(a)=>`${a.count||0} / 3` },
 ];
@@ -1426,7 +1432,7 @@ const MANAGER_ASSIGNMENTS = [
 function getAssignmentDef(id){ return MANAGER_ASSIGNMENTS.find(q=>q.id===id); }
 function canOfferManagerProgram(){
   if (!player.isAssistantManager || player.isManager || player.managerProgramActive) return false;
-  if (!player.hasReliableCar) return false;
+  if (!carQualifiesForManager()) return false;
   if (!player.assistantMgrPromotionDay) return false;
   return (player.day - player.assistantMgrPromotionDay) >= 28;
 }
@@ -1602,6 +1608,162 @@ function openManagerApplyPanel(){
   if (a) a.onclick=()=>{ closeOverlay(); startManagerProgram(); updateUI(); queueSave(); };
   if (b) b.onclick=()=>{ closeOverlay(); updateUI(); };
 }
+
+
+
+// --- CAR SYSTEM ---
+// Test durations are intentionally short so each tier can be verified quickly.
+const CAR_DEFS = {
+  beater: {
+    label: "Beater Car",
+    cost: BEATER_CAR_COST,
+    days: 21,
+    benefit: "50% chance work takes 2 segments",
+    qualifiesForManager: false,
+    img: "assets/car_reliable.png"
+  },
+  reliable: {
+    label: "Reliable Car",
+    cost: RELIABLE_CAR_COST,
+    days: 42,
+    benefit: "Work always takes 2 segments",
+    qualifiesForManager: true,
+    img: "assets/car_reliable.png"
+  },
+  new: {
+    label: "New Car",
+    cost: NEW_CAR_COST,
+    days: 70,
+    benefit: "Work takes 2 segments + Go for a Drive",
+    qualifiesForManager: true,
+    driveUses: 18,
+    img: "assets/car_reliable.png"
+  }
+};
+
+function getCarDef(type) {
+  return CAR_DEFS[type] || null;
+}
+
+function getCarLabel() {
+  if (!player.car) return "No Car";
+  const def = getCarDef(player.car.type);
+  return def ? def.label : "Car";
+}
+
+function getCarDaysLeft() {
+  return player.car && typeof player.car.daysLeft === "number" ? player.car.daysLeft : 0;
+}
+
+function getCarDriveUsesLeft() {
+  return player.car && player.car.type === "new" ? Math.max(0, player.car.driveUsesLeft || 0) : 0;
+}
+
+function getCarStatusLine() {
+  if (!player.car) return "No car owned.";
+  let line = getCarLabel() + " • " + getCarDaysLeft() + " day(s) left";
+  if (player.car.type === "new") line += " • Drive uses: " + getCarDriveUsesLeft();
+  return line;
+}
+
+function carQualifiesForManager() {
+  if (!player.car) return false;
+  const def = getCarDef(player.car.type);
+  return !!(def && def.qualifiesForManager);
+}
+
+function syncLegacyCarFlag() {
+  player.hasReliableCar = carQualifiesForManager();
+}
+
+function buyCarWithDurability(type) {
+  const def = getCarDef(type);
+  if (!def) return false;
+  if (player.car) {
+    showBanner("error", "You already own a car.");
+    return false;
+  }
+  if (player.money < def.cost) {
+    showBanner("error", "Not enough money.");
+    return false;
+  }
+
+  player.money -= def.cost;
+  player.car = {
+    type,
+    daysLeft: def.days,
+    driveUsedToday: false,
+    driveUsesLeft: def.driveUses || 0,
+    warnedLow: false
+  };
+  syncLegacyCarFlag();
+
+  appendLog("<strong>You buy a " + def.label.toLowerCase() + ".</strong> " + def.benefit + ".");
+  showBanner("success", "Purchased: " + def.label + ".");
+  return true;
+}
+
+function decayCarDaily() {
+  if (!player.car) return;
+  player.car.driveUsedToday = false;
+  player.car.daysLeft -= 1;
+
+  if (player.car.daysLeft <= 5 && !player.car.warnedLow && player.car.daysLeft > 0) {
+    player.car.warnedLow = true;
+    appendLog("<strong>Your car is starting to have issues.</strong>");
+    showBanner("error", "Your car is starting to have issues.");
+  }
+
+  if (player.car.daysLeft <= 0) {
+    const label = getCarLabel();
+    appendLog("<strong>Your " + label.toLowerCase() + " finally gave out.</strong>");
+    showBanner("error", "Your car finally gave out.");
+    player.car = null;
+    syncLegacyCarFlag();
+  }
+}
+
+function workEndsAtSegmentAfterCar() {
+  if (!player.car) return 3;
+  if (player.car.type === "reliable" || player.car.type === "new") return 2;
+  if (player.car.type === "beater") {
+    const startsToday = Math.random() < 0.5;
+    if (startsToday) {
+      appendLog("The beater holds together today. Work ends earlier.");
+      return 2;
+    }
+    appendLog("The beater gives you trouble today. Work still takes the full day.");
+    return 3;
+  }
+  return 3;
+}
+
+function getWorkTimeSubText() {
+  if (!player.car) return "Takes all day, good pay";
+  if (player.car.type === "beater") return "May take 2 segments";
+  return "Takes 2 segments, good pay";
+}
+
+function canGoForDrive() {
+  return !!(
+    player.car &&
+    player.car.type === "new" &&
+    !player.car.driveUsedToday &&
+    (player.car.driveUsesLeft || 0) > 0 &&
+    segments[player.segmentIndex] !== "Night"
+  );
+}
+
+function doGoForDrive() {
+  if (!canGoForDrive()) return;
+  player.energy = clamp(player.energy + 50, 0, 100);
+  player.car.driveUsedToday = true;
+  player.car.driveUsesLeft = Math.max(0, (player.car.driveUsesLeft || 0) - 1);
+  appendLog("You go for a drive. It clears your head a bit.");
+  showBanner("success", "Energy +50.");
+  nextSegment();
+}
+
 
 function updateUI() {
   maybeShowAssistantMgrFinalWeekendNotice();
@@ -1925,6 +2087,7 @@ function applyHygieneWarningIfNeeded() {
 }
 
 function handleNewDay() {
+  decayCarDaily();
   player.day += 1;
   player.segmentIndex = 0;
   player._endOfDayLock = false;
@@ -2403,7 +2566,7 @@ function doWorkShift() {
   showBanner("success", "Shift complete: +$" + wage + ".");
 
   // takes the day (reduced if you have a reliable car)
-  player.segmentIndex = player.hasReliableCar ? 2 : 3;
+  player.segmentIndex = workEndsAtSegmentAfterCar();
   // Tug-of-war promotion: allow pushes tonight after you worked a shift.
   if (isAssistantMgrRaceActive()) {
     player.assistantMgrCanPushTonight = true;
@@ -2694,66 +2857,63 @@ function openVehiclesPanel() {
   }
 
   openOverlay("vehicles", () => {
-    const owned = player.hasReliableCar;
-    const canAfford = player.money >= RELIABLE_CAR_COST;
+    const owned = !!player.car;
+    const rows = ["beater", "reliable", "new"].map(type => {
+      const def = getCarDef(type);
+      const isOwned = owned && player.car.type === type;
+      const canAfford = player.money >= def.cost;
+      const status = isOwned ? (getCarDaysLeft() + " day(s) left" + (type === "new" ? " • Drive uses: " + getCarDriveUsesLeft() : "")) : ("$" + def.cost);
+      return `
+        <div class="panel-row">
+          <span class="panel-label">${def.label}</span>
+          <span class="panel-value">${status}</span>
+        </div>
+        <div class="panel-row">
+          <span class="panel-label">Benefit</span>
+          <span class="panel-value">${def.benefit}</span>
+        </div>
+        <div class="panel-row">
+          <span class="panel-label">Duration</span>
+          <span class="panel-value">${def.days} day(s)${type === "new" ? " • 18 drive uses" : ""}</span>
+        </div>
+        <div class="panel-buttons">
+          <button class="panel-btn primary" data-buy-car="${type}" ${owned || !canAfford ? "disabled" : ""}>
+            ${isOwned ? "Owned" : (owned ? "Unavailable" : "Buy ($" + def.cost + ")")}
+          </button>
+        </div>
+      `;
+    }).join("<hr style='opacity:.15; margin:12px 0;'>");
 
     return `
       <div class="sidegig-panel">
         <div class="panel-header">
           <div class="panel-title">Vehicles</div>
-          <div class="panel-sub">A car doesn’t fix life — it gives you time back.</div>
+          <div class="panel-sub">Cars give you time back, but they do not last forever.</div>
         </div>
 
-        <div class="panel-row">
-          <span class="panel-label">Reliable Used Car</span>
-          <span class="panel-value">${owned ? "Owned" : "$" + RELIABLE_CAR_COST}</span>
-        </div>
-
-        <div class="panel-row">
-          <span class="panel-label">Benefit</span>
-          <span class="panel-value">Work takes 2 segments (instead of all day)</span>
-        </div>
-
-        <div class="panel-row">
-          <span class="panel-label">Status</span>
-          <span class="panel-value">${owned ? "You have reliable transportation." : "Available after apartment."}</span>
-        </div>
+        ${owned ? `<div class="panel-row"><span class="panel-label">Current Car</span><span class="panel-value">${getCarStatusLine()}</span></div>` : ``}
+        ${rows}
 
         <div class="panel-buttons">
-          <button class="panel-btn primary" id="buyReliableCarBtn" ${owned || !canAfford ? "disabled" : ""}>
-            ${owned ? "Purchased" : ("Buy ($" + RELIABLE_CAR_COST + ")")}
-          </button>
           <button class="panel-btn" id="vehiclesBackBtn">Back</button>
         </div>
-
-        ${(!owned && !canAfford)
-          ? `<div class="text-muted">You need $${RELIABLE_CAR_COST} to buy the car.</div>`
-          : `<div class="text-muted">Owning a car makes work end earlier — one segment back for the rest of the day.</div>`}
       </div>
     `;
   });
 
-  const buyBtn = document.getElementById("buyReliableCarBtn");
-  const backBtn = document.getElementById("vehiclesBackBtn");
-
-  if (buyBtn) {
-    buyBtn.onclick = () => {
-      if (player.hasReliableCar) return;
-      if (player.money < RELIABLE_CAR_COST) {
-        showBanner("error", "Not enough money.");
-        return;
-      }
-      player.money -= RELIABLE_CAR_COST;
-      player.hasReliableCar = true;
-      appendLog("<strong>You buy a reliable used car.</strong> It’s not luxury — it’s breathing room.");
-      showBanner("success", "Purchased: Reliable Used Car.");
+  const buyBtns = overlayPanel.querySelectorAll("[data-buy-car]");
+  buyBtns.forEach(btn => {
+    btn.onclick = () => {
+      const type = btn.getAttribute("data-buy-car");
+      if (!buyCarWithDurability(type)) return;
       clampStats();
       closeOverlay();
       updateUI();
       queueSave();
     };
-  }
+  });
 
+  const backBtn = document.getElementById("vehiclesBackBtn");
   if (backBtn) {
     backBtn.onclick = () => {
       closeOverlay();
@@ -2771,7 +2931,9 @@ function openAssetsPanel() {
   }
 
   openOverlay("assets", () => {
-    const hasCar = !!player.hasReliableCar;
+    const hasCar = !!player.car;
+    const carName = hasCar ? getCarLabel() : "Vehicle";
+    const carDesc = hasCar ? getCarStatusLine() : "No car owned.";
 
     return `
       <div class="sidegig-panel">
@@ -2790,12 +2952,12 @@ function openAssetsPanel() {
           <div class="asset-card ${hasCar ? "" : "locked"}">
             <div class="asset-row">
               <div>
-                <div class="asset-name">Reliable Used Car</div>
-                <div class="asset-desc">Reliable transportation. Work ends earlier.</div>
+                <div class="asset-name">${carName}</div>
+                <div class="asset-desc">${carDesc}</div>
               </div>
-              ${hasCar ? `<img class="asset-img" src="assets/car_reliable.png" alt="Reliable used car" />` : ""}
+              ${hasCar ? `<img class="asset-img" src="assets/car_reliable.png" alt="${carName}" />` : ""}
             </div>
-            <div class="asset-status ${hasCar ? "ok" : "locked"}">${hasCar ? "Owned" : "Not owned"}</div>
+            <div class="asset-status ${hasCar ? "ok" : "locked"}">${hasCar ? (getCarDaysLeft() + " day(s) left") : "Not owned"}</div>
           </div>
         </div>
 
@@ -2814,6 +2976,7 @@ function openAssetsPanel() {
     };
   }
 }
+
 
 // Assistant Manager — Promotion UI shell (logic later)
 function openAssistantManagerApplyPanel() {
@@ -4030,6 +4193,10 @@ function resolveLottery() {
 
 // --- RENDER ACTIONS ---
 function renderActions() {
+  if (player.chapter2Complete) {
+    actionsGrid.innerHTML = "";
+    return;
+  }
   actionsGrid.innerHTML = "";
   if (checkGameOver()) return;
 
@@ -4097,6 +4264,18 @@ function renderActions() {
 
       // Promotion push (Night-only) — available after a worked shift.
       // UI polish: keep Sleep on the left and render Push on the right.
+
+      if (canShowHouseGoal()) {
+        const houseReady = player.money >= 10000;
+        btn(
+          "Purchase Home",
+          houseReady ? "Sign mortgage • End Chapter 2" : getHouseGoalSubText(),
+          purchaseHome,
+          false,
+          "Purchase a home at 777 Whispering Escapes Lane. Requires $10,000 down payment. Weekly mortgage: $500.",
+          houseReady ? null : "You need $10,000 for the down payment. Current savings: $" + player.money + " / $10,000."
+        );
+      }
       if (canAssistantMgrPushNow()) {
         btn(
           "Push for Promotion",
@@ -4194,23 +4373,23 @@ function renderActions() {
         const isMgr = !!player.isManager;
         const isAM = !!player.isAssistantManager && !isMgr;
         const workLabel = isMgr ? "Work Manager Shift" : (isAM ? "Work Assistant Manager Shift" : (player.isShiftLead ? "Work Lead Shift" : "Work Fast Food Shift"));
-        const workSub = player.hasReliableCar ? "Takes 2 segments, good pay" : "Takes all day, good pay";
+        const workSub = getWorkTimeSubText();
 
         // Tooltip text should reflect the current role.
         const workTip = isMgr
-          ? (player.hasReliableCar
-              ? "Work a manager shift. Paid weekly ($700) on Saturdays after work. Costs: -30 Hunger, -35 Energy, -16 Hygiene. Time: 2 segments."
+          ? (player.car
+              ? "Work a manager shift. Paid weekly ($700) on Saturdays after work. Costs: -30 Hunger, -35 Energy, -16 Hygiene. Car may shorten the day depending on tier."
               : "Work a manager shift. Paid weekly ($700) on Saturdays after work. Costs: -30 Hunger, -35 Energy, -16 Hygiene. Takes the whole day.")
           : isAM
-          ? (player.hasReliableCar
-              ? "Work an assistant manager shift. Paid weekly ($420–$480) on Saturdays after work. Costs: -30 Hunger, -45 Energy, -18 Hygiene. Time: 2 segments."
+          ? (player.car
+              ? "Work an assistant manager shift. Paid weekly ($420–$480) on Saturdays after work. Costs: -30 Hunger, -45 Energy, -18 Hygiene. Car may shorten the day depending on tier."
               : "Work an assistant manager shift. Paid weekly ($420–$480) on Saturdays after work. Costs: -30 Hunger, -45 Energy, -18 Hygiene. Takes the whole day.")
           : (player.isShiftLead
-              ? (player.hasReliableCar
-                  ? "Work a lead shift. Earn $33–$44. Costs: -30 Hunger, -45 Energy, -19 Hygiene. Time: 2 segments."
+              ? (player.car
+                  ? "Work a lead shift. Earn $33–$44. Costs: -30 Hunger, -45 Energy, -19 Hygiene. Car may shorten the day depending on tier."
                   : "Work a lead shift. Earn $33–$44. Costs: -30 Hunger, -45 Energy, -19 Hygiene. Takes the whole day.")
-              : (player.hasReliableCar
-                  ? "Work a shift. Earn $26–$34. Costs: -30 Hunger, -45 Energy, -22 Hygiene. Time: 2 segments."
+              : (player.car
+                  ? "Work a shift. Earn $26–$34. Costs: -30 Hunger, -45 Energy, -22 Hygiene. Car may shorten the day depending on tier."
                   : "Work a shift. Earn $26–$34. Costs: -30 Hunger, -45 Energy, -22 Hygiene. Takes the whole day."));
 
         btn(
@@ -4249,11 +4428,17 @@ function renderActions() {
     // Apartment daytime: keep some tools, but not street-only ones
     btn("Library", "Study, +Int & Hope", doLibrary, false, "Gain: +1 Intelligence, +1 Hope. Costs: -6 Hunger, -10 Energy, -3 Hygiene. Time: 1 segment.");
     btn("Gym", "Exercise, +Fitness", doGym, false, "Gain: +1 Fitness. Costs: -12 Hunger, -20 Energy, -12 Hygiene. Time: 1 segment.");
-    btn("Rest", "Disabled for this test", () => {}, false, "Rest is disabled in this test build.", "Rest is disabled in this test build.");
     btn("Wash Up", "Restore hygiene (important for work)", doWash, false);
     btn("Recreation...", "Fishing, Movies, Vacation", openRecreationPanel, false);
+    if (player.car && player.car.type === "new") {
+      const noUses = getCarDriveUsesLeft() <= 0;
+      const driveDisabled = player.car.driveUsedToday ? "You already used your car to clear your head today." : (noUses ? "No drive uses left for this car." : null);
+      btn("Go for a Drive", noUses ? "No uses left" : (player.car.driveUsedToday ? "Already used today" : "+50 Energy • " + getCarDriveUsesLeft() + " uses left"), doGoForDrive, false, "Gain: +50 Energy. Costs: 1 segment. New Car only.", driveDisabled);
+    }
     btn("Vehicles", "Buy a car (apartment tier)", openVehiclesPanel, false, "Purchase vehicles. A reliable car makes your work shift take 2 segments instead of all day.");
     btn("Assets", "View what you own", openAssetsPanel, false, "See your apartment and any vehicles you’ve purchased.");
+
+    
 
     // Assistant Manager (UI shell): appears after the opportunity notice.
     if (player.assistantMgrApplied) {
@@ -4448,3 +4633,192 @@ function openStartMenu() {
     }
   });
 })();
+
+
+
+
+function canShowHouseGoal() {
+  return !!(player.hasApartment && player.isAssistantManager);
+}
+
+function getHouseGoalSubText() {
+  return "$" + Math.min(player.money || 0, 10000) + " / $10,000 saved";
+}
+
+function purchaseHome() {
+  if (player.money < 10000) {
+    showBanner("error", "You need $10,000 for the down payment.");
+    appendLog("You look at the home paperwork, but you don't have the down payment yet.");
+    return;
+  }
+
+  openHouseMortgageOverlay();
+}
+
+function openHouseMortgageOverlay() {
+  openOverlay("mortgage", () => {
+    return `
+      <div class="sidegig-panel">
+        <div class="panel-header">
+          <div class="panel-title">Mortgage Agreement</div>
+          <div class="panel-sub">
+            RESIDENTIAL MORTGAGE AGREEMENT<br><br>
+            <strong>Property Address:</strong><br>
+            777 Whispering Escapes Lane<br><br>
+            <strong>Down Payment:</strong> $10,000<br>
+            <strong>Weekly Mortgage:</strong> $500<br><br>
+            By signing below, you accept the financial responsibility of home ownership.<br><br>
+            <em>You sit quietly for a while after signing. It doesn't feel real yet.</em><br><br>
+            Signature:
+          </div>
+        </div>
+
+        <div class="panel-actions">
+          <div style="margin-bottom:10px;">
+            <canvas id="sigCanvas" width="320" height="140" style="width:100%; max-width:360px; border:1px solid rgba(255,255,255,0.25); border-radius:10px; background:rgba(0,0,0,0.15); touch-action:none;"></canvas>
+            <div style="margin-top:8px; font-size:12px; opacity:0.85;">Draw your signature (optional).</div>
+          </div>
+
+          <button class="panel-button" id="sigClearBtn" type="button">Delete Signature</button>
+          <button class="panel-button primary" id="sigDoneBtn" type="button">Sign Mortgage</button>
+          <button class="panel-button" id="sigCancelBtn" type="button">Keep Renting For Now</button>
+        </div>
+      </div>
+    `;
+  });
+
+  const canvas = overlayPanel.querySelector("#sigCanvas");
+  const clearBtn = overlayPanel.querySelector("#sigClearBtn");
+  const doneBtn = overlayPanel.querySelector("#sigDoneBtn");
+  const cancelBtn = overlayPanel.querySelector("#sigCancelBtn");
+
+  const ctx = canvas.getContext("2d");
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "rgba(255,255,255,0.95)";
+
+  let drawing = false;
+  let didDraw = false;
+
+  const getPos = (ev) => {
+    const rect = canvas.getBoundingClientRect();
+    const clientX = (ev.touches && ev.touches[0]) ? ev.touches[0].clientX : ev.clientX;
+    const clientY = (ev.touches && ev.touches[0]) ? ev.touches[0].clientY : ev.clientY;
+    return {
+      x: (clientX - rect.left) * (canvas.width / rect.width),
+      y: (clientY - rect.top) * (canvas.height / rect.height),
+    };
+  };
+
+  const start = (ev) => {
+    drawing = true;
+    const p = getPos(ev);
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    ev.preventDefault?.();
+  };
+  const move = (ev) => {
+    if (!drawing) return;
+    const p = getPos(ev);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    didDraw = true;
+    ev.preventDefault?.();
+  };
+  const end = (ev) => {
+    drawing = false;
+    ev.preventDefault?.();
+  };
+
+  canvas.addEventListener("pointerdown", start);
+  canvas.addEventListener("pointermove", move);
+  canvas.addEventListener("pointerup", end);
+  canvas.addEventListener("pointercancel", end);
+  canvas.addEventListener("touchstart", start, { passive: false });
+  canvas.addEventListener("touchmove", move, { passive: false });
+  canvas.addEventListener("touchend", end, { passive: false });
+
+  clearBtn.addEventListener("click", () => {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    didDraw = false;
+  });
+
+  cancelBtn.addEventListener("click", () => {
+    closeOverlay();
+    appendLog("You decide to keep renting for now.");
+    showBanner("", "You keep renting for now.");
+    updateUI();
+    queueSave();
+  });
+
+  doneBtn.addEventListener("click", () => {
+    let dataUrl = "";
+    try {
+      if (didDraw) dataUrl = canvas.toDataURL("image/png");
+    } catch (e) { /* ignore */ }
+
+    player.money -= 10000;
+    player.hasHouse = true;
+    player.houseAddress = "777 Whispering Escapes Lane";
+    player.chapter2Complete = true;
+    if (dataUrl) player.lastMortgageSignature = dataUrl;
+
+    appendLog("<strong>You bought a home at 777 Whispering Escapes Lane.</strong>");
+    showBanner("success", "Chapter 2 Complete.");
+    queueSave();
+
+    openChapter2CompleteOverlay();
+  });
+}
+
+function openChapter2CompleteOverlay() {
+  openOverlay("chapter2_complete", () => {
+    const discordButton = (DISCORD_INVITE_URL && !DISCORD_INVITE_URL.includes("REPLACE_ME"))
+      ? '<button class="panel-button" id="chapter2DiscordBtn" type="button">Join the Discord</button>'
+      : '';
+    return `
+      <div class="sidegig-panel">
+        <div class="panel-header">
+          <div class="panel-title">Chapter 2 Complete</div>
+          <div class="panel-sub">
+            You finally have a place of your own.<br><br>
+            It doesn't solve everything.<br>
+            But it changes what comes next.<br><br>
+            Thank you for playing.
+          </div>
+        </div>
+        <div class="panel-actions">
+          <button class="panel-button primary" id="chapter2RestartBtn" type="button">Restart</button>
+          <button class="panel-button" id="chapter2TitleBtn" type="button">Return to Title</button>
+          <button class="panel-button" id="chapter2CreditsBtn" type="button">Credits</button>
+          ${discordButton}
+        </div>
+      </div>
+    `;
+  });
+
+  const restartBtn = overlayPanel.querySelector("#chapter2RestartBtn");
+  if (restartBtn) restartBtn.addEventListener("click", () => {
+    closeOverlay();
+    clearSave();
+    softRestartRun();
+  });
+
+  const titleBtn = overlayPanel.querySelector("#chapter2TitleBtn");
+  if (titleBtn) titleBtn.addEventListener("click", () => {
+    closeOverlay();
+    clearSave();
+    returnToTitleScreen();
+  });
+
+  const creditsBtn = overlayPanel.querySelector("#chapter2CreditsBtn");
+  if (creditsBtn) creditsBtn.addEventListener("click", () => {
+    openCreditsOverlay(() => openChapter2CompleteOverlay());
+  });
+
+  const discordBtn = overlayPanel.querySelector("#chapter2DiscordBtn");
+  if (discordBtn) discordBtn.addEventListener("click", () => {
+    if (DISCORD_INVITE_URL) window.open(DISCORD_INVITE_URL, "_blank", "noopener");
+  });
+}
